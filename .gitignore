@@ -1,0 +1,35 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Node
+node_modules/
+
+# PHP / Composer
+vendor/
+composer.lock
+
+# Build & packaging
+*.zip
+*.tar.gz
+dist/
+
+# Logs & temp
+*.log
+*.tmp
+
+# Env / secrets (never commit)
+.env
+.env.*
+!*.env.example
+
+# ZCode machine-owned drafts
+.zcode/
+
+# Tests
+Tests/bin/
+phpunit.xml
+.cache/
