@@ -499,7 +499,8 @@ class RestApi
         if (!$post) {
             return self::fail('پست یافت نشد.', 404, 'not_found');
         }
-        if ((int) $post['channel_id'] <= 0 || trim((string) $post['body']) === '') {
+        // Telegram channel IDs are negative; only 0 means unset.
+        if ((int) $post['channel_id'] === 0 || trim((string) $post['body']) === '') {
             return self::fail('متن یا کانال پست تنظیم نشده است.');
         }
 

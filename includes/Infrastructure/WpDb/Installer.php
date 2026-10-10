@@ -132,20 +132,32 @@ class Installer
             $this->wpdb->query("DROP TABLE IF EXISTS $t");
         }
 
-        // Plugin option names are stored WITHOUT the DB table prefix, so all
-        // cleanup LIKEs must use the plain 'ata\_%' pattern. The old code used
-        // $wpdb->prefix here, leaving bot tokens and AI API keys behind after
-        // uninstall (secret leak through leftover options).
+        // Load matching option names first, then delete each via delete_option()
+        // (cache-aware). NOTE: a raw LIKE pattern must go through esc_like(),
+        // otherwise prepare()'s escaping turns 'ata\_%' into a pattern that
+        // matches nothing and secrets silently survive uninstall.
         $options = $this->wpdb->options;
+        $like = $this->wpdb->esc_like('ata_') . '%';
+        $names = $this->wpdb->get_col($this->wpdb->prepare("SELECT option_name FROM $options WHERE option_name LIKE %s", $like));
+        foreach ($names as $name) {
+            delete_option((string) $name);
+        }
 
-        // Everything the plugin created: settings, secrets, bot info, migrations.
-        $this->wpdb->query(
-            $this->wpdb->prepare("DELETE FROM $options WHERE option_name LIKE %s", 'ata\\_%')
-        );
+        // Transients live under _transient_* / _transient_timeout_* names.
+        foreach (['_transient_ata_', '_transient_timeout_ata_'] as $tPrefix) {
+            $tLike = $this->wpdb->esc_like($tPrefix) . '%';
+            $this->wpdb->query($this->wpdb->prepare("DELETE FROM $options WHERE option_name LIKE %s", $tLike));
+        }
+
         // Legacy prefix-named leftovers from very old builds (harmless if none).
-        $this->wpdb->query(
-            $this->wpdb->prepare("DELETE FROM $options WHERE option_name LIKE %s", $this->wpdb->prefix . 'ata\\_%')
-        );
+        $legacyLike = $this->wpdb->esc_like($this->wpdb->prefix . 'ata_') . '%';
+        $this->wpdb->query($this->wpdb->prepare("DELETE FROM $options WHERE option_name LIKE %s", $legacyLike));
+
+        // Direct SQL deletes bypass WP's object cache — flush it so any
+        // get_option() later in the same request doesn't resurrect deleted
+        // values from the alloptions cache.
+        wp_cache_delete('alloptions', 'options');
+        wp_cache_delete('notoptions', 'options');
 
         delete_option('ata_db_version');
     }

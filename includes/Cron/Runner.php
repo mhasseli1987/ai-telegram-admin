@@ -137,14 +137,32 @@ class Runner
                 [$now, $now, $postId]
             ));
 
+            self::logger()->info('Post published', [
+                'scope'      => 'publish',
+                'post_id'    => $postId,
+                'channel_id' => $channelId,
+                'message_id' => (int) ($sent['message_id'] ?? 0),
+            ]);
+
             self::completeJob((int) $job['id']);
         } catch (\Throwable $e) {
             $wpdb->query($wpdb->prepare(
                 "UPDATE $posts SET attempts = attempts + 1, last_error_code = %s WHERE id = %d",
                 ['publish_failed', $postId]
             ));
+            self::logger()->error('Publish failed', [
+                'scope'   => 'publish',
+                'post_id' => $postId,
+                'error'   => $e->getMessage(),
+            ]);
             self::retryJob((int) $job['id'], $e->getMessage());
         }
+    }
+
+    /** Logger resolved lazily so the class stays testable without a container. */
+    public static function logger(): \ATA\Contracts\Log\LoggerInterface
+    {
+        return \ATA\Core\Container::instance()->make(\ATA\Contracts\Log\LoggerInterface::class);
     }
 
     private static function completeJob(int $jobId): void

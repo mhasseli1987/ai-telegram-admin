@@ -267,7 +267,7 @@ class OpenAICompatibleProvider implements AIProviderInterface
         }
         // Case-insensitive filter: HTTP header names are case-insensitive, and a
         // custom config must never override the Authorization set above.
-        foreach ((array) $config['headers'] as $k => $v) {
+        foreach ((array) ($config['headers'] ?? []) as $k => $v) {
             $k = (string) $k;
             if ($k === '' || !is_scalar($v)) {
                 continue;
