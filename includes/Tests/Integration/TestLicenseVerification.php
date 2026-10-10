@@ -146,7 +146,7 @@ class TestLicenseVerification extends IntegrationTestCase
         $result = $license->deactivate();
 
         $this->assertTrue($result['success']);
-        $this->assertEquals('لایسنس غیرعالی شد.', $result['message']);
+        $this->assertEquals('لایسنس غیرفعال شد.', $result['message']);
 
         // Verify option removed
         $this->assertFalse(get_option('ata_license', false));
@@ -266,6 +266,7 @@ class TestLicenseVerification extends IntegrationTestCase
 
     public function test_license_admin_page_renders(): void
     {
+        wp_set_current_user($this->adminUserId);
         $license = $this->container->make(\ATA\License\LicenseManager::class);
 
         // Capture output
@@ -275,10 +276,13 @@ class TestLicenseVerification extends IntegrationTestCase
 
         $this->assertStringContainsString('لایسنس', $output);
         $this->assertStringContainsString('کلید لایسنس', $output);
+        // The page must include a nonce (CSRF protection added in Phase 15).
+        $this->assertStringContainsString('ata_license_nonce', $output);
     }
 
     public function test_license_admin_page_shows_status(): void
     {
+        wp_set_current_user($this->adminUserId);
         $this->mockHttp->setResponse('POST', '*/verify-license.php', [
             'code'    => 200,
             'body'    => json_encode(['valid' => true, 'expires' => date('Y-m-d H:i:s', time() + 86400)]),

@@ -40,7 +40,8 @@ class MenuProvider
             ['Channels', 'channels', 'manage_options', 'ata-channels'],
             ['Posts', 'posts', 'manage_options', 'ata-posts'],
             ['Logs', 'logs', 'manage_options', 'ata-logs'],
-            ['License', 'license', 'manage_options', 'ata-license'],
+            // License submenu is registered by LicenseManager::registerMenu()
+            // (classic form — works even without the SPA).
             ['Settings', 'settings', 'manage_options', 'ata-settings'],
             ['Dashboard', 'dashboard', 'manage_options', 'ata-dashboard'],
             ['Help', 'help', 'manage_options', 'ata-help'],

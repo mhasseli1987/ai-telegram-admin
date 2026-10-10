@@ -133,11 +133,15 @@ class Plugin
         // Scheduler adapter: Action Scheduler preferred, WP-Cron fallback.
         SchedulerAdapter::register();
 
-        // License activation / verification.
-        add_action('admin_menu', [LicenseManager::class, 'adminPage']);
+        // License submenu (LicenseManager::adminPage was hooked straight to
+        // admin_menu before, which echoed HTML during menu registration).
+        add_action('admin_menu', [LicenseManager::class, 'registerMenu']);
 
         // License status check on init.
         add_action('init', [LicenseManager::class, 'maybeCheckStatus']);
+
+        // Phase 15: update/version check + secure download gate (fail-safe).
+        \ATA\License\Updater::register();
 
         // Assets.
         add_action('admin_enqueue_scripts', [$this, 'enqueueAssets']);
