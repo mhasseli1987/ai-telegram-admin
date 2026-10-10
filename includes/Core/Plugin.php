@@ -24,6 +24,7 @@ use ATA\Contracts\HttpClientInterface;
 use ATA\Infrastructure\WpDb\PostRepository;
 use ATA\Cron\Runner;
 use ATA\Cron\SchedulerAdapter;
+use ATA\License\LicenseManager;
 
 defined('ABSPATH') || exit;
 
@@ -124,6 +125,12 @@ class Plugin
 
         // Scheduler adapter: Action Scheduler preferred, WP-Cron fallback.
         SchedulerAdapter::register();
+
+        // License activation / verification.
+        add_action('admin_menu', [LicenseManager::class, 'adminPage']);
+
+        // License status check on init.
+        add_action('init', [LicenseManager::class, 'maybeCheckStatus']);
 
         // Assets.
         add_action('admin_enqueue_scripts', [$this, 'enqueueAssets']);
