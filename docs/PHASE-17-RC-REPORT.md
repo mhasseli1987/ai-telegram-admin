@@ -4,7 +4,7 @@
 
 ## بسته RC
 - **فایل:** `dist/ata-telegram-ai-admin-1.0.0-MVP-rc1.zip` (49.3 KB)
-- **SHA-256:** `fc0802c0f276fb909682353692028f4272a524f662d783cfc44e7ff230274c41`
+- **SHA-256:** `1c5f12a3d3bf48f8053fd0f8680cd0e1b485d5c06ff2e6572f91e2bbfc6a6bcf` *(بازسازی‌شده 2026-10-11 از `bc77d57` — نسخهٔ اولیه از staging قدیمی ساخته شده بود و آخرین فیکس‌ها را نداشت؛ هش قبلی: `fc0802…c41`)*
 - **ساختار:** `ata-telegram-ai-admin/ata-telegram-ai-admin.php` + `includes/` (30 فایل PHP، lint پاس)
 - **حذف‌شده از بسته:** `includes/Tests`, `docs/`, `SESSIONS/`, `composer.json`, `phpunit.xml.dist`, SPECIFICATION (dev-only)
 

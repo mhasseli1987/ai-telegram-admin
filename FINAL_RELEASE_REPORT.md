@@ -9,7 +9,8 @@
 **ATA: AI Telegram Admin (آتا)** — افزونه وردپرس برای مدیران سایتی که کانال تلگرام فعال دارند: تولید/بازنویسی/خلاصه/ترجمه محتوا با هر سرویس سازگار OpenAI، پیش‌نمایش و تأیید انسانی، زمان‌بندی و انتشار تضمین‌شده با صف اتمیک، همه از داخل پیشخوان وردپرس و تمام‌فارسی.
 
 - **برند:** آتا (ATA) | **Slug:** `ata-telegram-ai-admin` | **نسخه:** 1.0.0-MVP
-- **بسته:** `dist/ata-telegram-ai-admin-1.0.0-MVP-rc1.zip` — SHA-256 `fc0802c0f276fb909682353692028f4272a524f662d783cfc44e7ff230274c41`
+- **بسته:** `dist/ata-telegram-ai-admin-1.0.0-MVP-rc1.zip` — SHA-256 `1c5f12a3d3bf48f8053fd0f8680cd0e1b485d5c06ff2e6572f91e2bbfc6a6bcf`
+- **یادداشت بازسازی بسته (2026-10-11):** بستهٔ اولیه ناخواسته از پوشهٔ staging قدیمی (`dist/ata-telegram-ai-admin/` با اسنپ‌شات میانهٔ فاز ۱۷) ساخته شده بود و ۴ فایل اصلاح‌شدهٔ نهایی (Installer/RestApi/Runner/OpenAICompatibleProvider) را نداشت. بستهٔ فعلی مستقیماً از `git archive bc77d57` بازسازی و تفاوت صفر با کد تست‌شده تأیید شد؛ هش بالا جایگزین هش قبلی (`fc0802…c41`) است.
 - **مخزن:** github.com/mhasseli1987/ai-telegram-admin
 
 ## Final Features
