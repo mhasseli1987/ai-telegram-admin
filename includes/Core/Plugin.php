@@ -23,6 +23,7 @@ use ATA\Contracts\SecretStoreInterface;
 use ATA\Contracts\HttpClientInterface;
 use ATA\Infrastructure\WpDb\PostRepository;
 use ATA\Cron\Runner;
+use ATA\Cron\SchedulerAdapter;
 
 defined('ABSPATH') || exit;
 
@@ -120,6 +121,9 @@ class Plugin
         });
         add_action(Runner::HOOK, [Runner::class, 'handle']);
         add_action('init', [Runner::class, 'ensureScheduled']);
+
+        // Scheduler adapter: Action Scheduler preferred, WP-Cron fallback.
+        SchedulerAdapter::register();
 
         // Assets.
         add_action('admin_enqueue_scripts', [$this, 'enqueueAssets']);
