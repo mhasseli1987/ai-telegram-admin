@@ -377,6 +377,19 @@ class TestTelegramAiProviders extends IntegrationTestCase
     {
         $ssrf = $this->container->make(\ATA\Security\SsrfGate::class);
 
+        // Deterministic DNS answers: the suite must not depend on the machine's
+        // live resolver (transient failures behind VPN/filtered networks made
+        // the hostname cases flaky). Production fail-closed-on-empty behavior
+        // is unaffected — unknown hosts resolve to nothing and stay blocked.
+        $ssrf->setResolver(static function (string $host): array {
+            $map = [
+                'api.telegram.org' => ['v4' => ['149.154.167.51'], 'v6' => ['2001:67c:4e8:f004::9']],
+                'api.openai.com'   => ['v4' => ['104.18.7.192'], 'v6' => ['2606:4700::6810:84e5']],
+                'example.com'      => ['v4' => ['93.184.216.34'], 'v6' => []],
+            ];
+            return $map[$host] ?? ['v4' => [], 'v6' => []];
+        });
+
         // These should be blocked
         $this->assertFalse($ssrf->isAllowed('http://127.0.0.1'));
         $this->assertFalse($ssrf->isAllowed('http://10.0.0.1'));

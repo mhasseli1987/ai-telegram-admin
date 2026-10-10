@@ -51,27 +51,14 @@ class SsrfGate
         }
 
         // Resolve both address families; reject when ANY resolved IP is blocked
-        // (fail-closed, rebinding-hardened).
+        // (fail-closed, rebinding-hardened). Empty resolution also rejects.
+        $resolved = $this->resolveHost($host);
         $blocked = false;
-        $resolvedAny = false;
+        $resolvedAny = ($resolved['v4'] !== [] || $resolved['v6'] !== []);
 
-        $v4 = @gethostbynamel($host); // A records
-        if (is_array($v4) && !empty($v4)) {
-            $resolvedAny = true;
-            foreach ($v4 as $ip) {
-                if ($this->isBlockedIp($ip)) {
-                    $blocked = true;
-                }
-            }
-        }
-
-        $v6 = $this->resolveAaaa($host);
-        if ($v6 !== []) {
-            $resolvedAny = true;
-            foreach ($v6 as $ip) {
-                if ($this->isBlockedIp($ip)) {
-                    $blocked = true;
-                }
+        foreach (array_merge($resolved['v4'], $resolved['v6']) as $ip) {
+            if ($this->isBlockedIp($ip)) {
+                $blocked = true;
             }
         }
 
@@ -79,6 +66,38 @@ class SsrfGate
             return false;
         }
         return true;
+    }
+
+    /**
+     * DNS resolver seam: production resolves both families live (fail-closed
+     * on empty); tests inject deterministic answers so the suite never depends
+     * on the machine's live DNS (transient resolver failures made the hostname
+     * cases flaky behind VPN/filtered networks).
+     *
+     * @var ?callable(string $host): array{v4: string[], v6: string[]}
+     */
+    private $resolver = null;
+
+    /** Swap in a deterministic resolver (tests). Null restores live DNS. */
+    public function setResolver(?callable $resolver): void
+    {
+        $this->resolver = $resolver;
+    }
+
+    /** @return array{v4: string[], v6: string[]} */
+    private function resolveHost(string $host): array
+    {
+        if ($this->resolver !== null) {
+            $r = ($this->resolver)($host);
+            return [
+                'v4' => is_array($r['v4'] ?? null) ? $r['v4'] : [],
+                'v6' => is_array($r['v6'] ?? null) ? $r['v6'] : [],
+            ];
+        }
+        return [
+            'v4' => @gethostbynamel($host) ?: [],
+            'v6' => $this->resolveAaaa($host),
+        ];
     }
 
     /** Resolve AAAA records cross-driver (IPv6 bindTo or curl). */
