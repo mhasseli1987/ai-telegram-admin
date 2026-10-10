@@ -20,16 +20,22 @@ class LogRepository
         return $this->wpdb->prefix . 'ata_logs';
     }
 
-    public function insert(array $row): void
+    /** @return int inserted row ID. */
+    public function insert(array $row): int
     {
+        $context = $row['context'] ?? '';
+        if (is_array($context)) {
+            $context = wp_json_encode($context, JSON_UNESCAPED_UNICODE);
+        }
         $this->wpdb->insert($this->table(), [
             'scope'      => $row['scope'] ?? 'system',
             'level'      => $row['level'] ?? 'info',
             'message'    => $row['message'] ?? '',
-            'context'    => $row['context'] ?? '',
+            'context'    => $context,
             'request_id' => $row['request_id'] ?? null,
             'created_at' => current_time('mysql', 1),
         ]);
+        return (int) $this->wpdb->insert_id;
     }
 
     public function all(int $limit = 100, int $offset = 0, array $filters = []): array
@@ -75,6 +81,28 @@ class LogRepository
         return (int) ($params
             ? $this->wpdb->get_var($this->wpdb->prepare($sql, ...$params))
             : $this->wpdb->get_var($sql));
+    }
+
+    public function find(int $id): ?array
+    {
+        $row = $this->wpdb->get_row(
+            $this->wpdb->prepare('SELECT * FROM ' . $this->table() . ' WHERE id = %d', $id),
+            ARRAY_A
+        );
+        return $row ?: null;
+    }
+
+    /**
+     * Retention policy: delete entries older than $days days. Returns affected rows.
+     */
+    public function deleteOld(int $days = 30): int
+    {
+        $cutoff = gmdate('Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS);
+        $this->wpdb->query($this->wpdb->prepare(
+            'DELETE FROM ' . $this->table() . ' WHERE created_at < %s',
+            $cutoff
+        ));
+        return (int) $this->wpdb->rows_affected;
     }
 
     public function deleteAll(): void

@@ -8,7 +8,7 @@ if (!defined('WP_TEST_DIR')) {
 }
 define('TEST_EMAIL', 'test@example.com');
 
-class TestCase extends WP_Unit_Test_Case
+class TestCase extends WP_UnitTestCase
 {
     protected function setUp(): void
     {

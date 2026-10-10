@@ -11,10 +11,14 @@ class TestQueueExecution extends IntegrationTestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // The Telegram provider requires a configured token for publish jobs.
+        (new \ATA\Security\SecretStore())->set('telegram_bot_token', '123456:TEST-TOKEN');
     }
 
     protected function tearDown(): void
     {
+        (new \ATA\Security\SecretStore())->delete('telegram_bot_token');
         parent::tearDown();
     }
 
@@ -43,8 +47,9 @@ class TestQueueExecution extends IntegrationTestCase
     public function test_runner_respects_max_jobs_per_run(): void
     {
         // This test would need to modify MAX_JOBS_PER_RUN constant or mock it
-        // For now, verify the constant exists
-        $this->assertEquals(5, \ATA\Cron\Runner::MAX_JOBS_PER_RUN);
+        // For now, verify the constant exists (private const → reflection).
+        $const = (new ReflectionClass(\ATA\Cron\Runner::class))->getConstant('MAX_JOBS_PER_RUN');
+        $this->assertEquals(5, $const);
     }
 
     public function test_atomic_claim_prevents_double_processing(): void
@@ -101,7 +106,7 @@ class TestQueueExecution extends IntegrationTestCase
 
     public function test_publish_post_with_image_sends_photo(): void
     {
-        $attachmentId = $this->factory->attachment->create_upload_object('test-image.jpg');
+        $attachmentId = $this->factory->attachment->create_upload_object(DIR_TESTDATA . '/images/canola.jpg');
 
         $postId = $this->createTestPost([
             'status'     => 'scheduled',
@@ -151,7 +156,7 @@ class TestQueueExecution extends IntegrationTestCase
         // Job should be retried (status back to pending)
         $queue = $this->getQueueItem($queueId);
         $this->assertEquals('pending', $queue['status']);
-        $this->assertEquals(2, $queue['attempts']); // incremented
+        $this->assertEquals(1, $queue['attempts']); // incremented once by retryJob()
     }
 
     public function test_job_fails_when_post_not_found(): void
@@ -345,23 +350,25 @@ class TestQueueExecution extends IntegrationTestCase
 
     // --------------------------------------------------------------- Helpers
 
-    private function createQueueItem(array $overrides = []): int
+    protected function createQueueItem(array $overrides = []): int
     {
+        // Matches Installer schema (no priority column).
         $defaults = [
             'job_type'     => 'publish_post',
             'status'       => 'pending',
-            'priority'     => 0,
             'attempts'     => 0,
             'max_attempts' => 5,
             'payload'      => '{}',
             'next_run_at'  => current_time('mysql', 1),
+            'created_at'   => current_time('mysql', 1),
+            'updated_at'   => current_time('mysql', 1),
         ];
         $data = array_merge($defaults, $overrides);
         $this->wpdb->insert($this->wpdb->prefix . 'ata_queue', $data);
         return (int) $this->wpdb->insert_id;
     }
 
-    private function getQueueItem(int $id): ?array
+    protected function getQueueItem(int $id): ?array
     {
         return $this->wpdb->get_row(
             $this->wpdb->prepare("SELECT * FROM {$this->wpdb->prefix}ata_queue WHERE id = %d", $id),

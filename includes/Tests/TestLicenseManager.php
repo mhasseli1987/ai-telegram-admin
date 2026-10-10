@@ -7,7 +7,7 @@ if (!defined('WP_TEST_DIR')) {
     define('WP_TEST_DIR', sys_get_temp_dir() . '/wordpress-tests-lib');
 }
 
-class TestLicenseManager extends WP_Unit_Test_Case
+class TestLicenseManager extends WP_UnitTestCase
 {
     protected function setUp(): void
     {

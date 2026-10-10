@@ -3,34 +3,74 @@
  * Unit test for ATA Logger.
  * Tests structured logging with redaction.
  */
-if (!defined('WP_TEST_DIR')) {
-    define('WP_TEST_DIR', sys_get_temp_dir() . '/wordpress-tests-lib');
-}
-
-class TestLogger extends WP_Unit_Test_Case
+class TestLogger extends WP_UnitTestCase
 {
     public function test_redaction_strips_sensitive_data(): void
     {
-        $logger = new \ATA\Logging\Logger();
-
-        $result = $logger->log([
+        $context = [
             'user_id' => 123,
             'api_key' => 'sk-live-abc123secret',
             'action'  => 'test_action',
-        ]);
+        ];
 
-        $this->assertStringNotContainsString('sk-live-abc123secret', $result);
-        $this->assertStringNotContainsString('secret', $result);
-        $this->assertStringContainsString('user_id', $result);
-        $this->assertStringContainsString('action', $result);
+        $result = \ATA\Logging\Logger::redact($context);
+
+        $this->assertNotEquals('sk-live-abc123secret', $result['api_key']);
+        $this->assertEquals('***', $result['api_key']);
+        $this->assertEquals(123, $result['user_id']);
+        $this->assertEquals('test_action', $result['action']);
     }
 
-    public function test_log_returns_string(): void
+    public function test_redaction_strips_bearer_token(): void
     {
-        $logger = new \ATA\Logging\Logger();
+        $context = [
+            'authorization' => 'Bearer sk-test123456789',
+            'message'       => 'API call',
+        ];
 
-        $result = $logger->log(['test' => 'data']);
+        $result = \ATA\Logging\Logger::redact($context);
 
-        $this->assertIsString($result);
+        $this->assertEquals('***', $result['authorization']);
+    }
+
+    public function test_redaction_preserves_non_secrets(): void
+    {
+        $context = [
+            'normal_key' => 'normal_value',
+            'count'      => 42,
+            'nested'     => [
+                'inner' => 'data',
+            ],
+        ];
+
+        $result = \ATA\Logging\Logger::redact($context);
+
+        $this->assertEquals('normal_value', $result['normal_key']);
+        $this->assertEquals(42, $result['count']);
+        $this->assertEquals(['inner' => 'data'], $result['nested']);
+    }
+
+    public function test_isSecretKey_patterns_via_redact(): void
+    {
+        // isSecretKey() is private; verify its behavior through the public redact().
+        $result = \ATA\Logging\Logger::redact([
+            'api_key'       => 'A',
+            'apikey'        => 'B',
+            'bot_token'     => 'C',
+            'secret'        => 'D',
+            'authorization' => 'E',
+            'password'      => 'F',
+            'username'      => 'G',
+            'normal_field'  => 'H',
+        ]);
+
+        $this->assertEquals('***', $result['api_key']);
+        $this->assertEquals('***', $result['apikey']);
+        $this->assertEquals('***', $result['bot_token']);
+        $this->assertEquals('***', $result['secret']);
+        $this->assertEquals('***', $result['authorization']);
+        $this->assertEquals('***', $result['password']);
+        $this->assertEquals('G', $result['username']);
+        $this->assertEquals('H', $result['normal_field']);
     }
 }

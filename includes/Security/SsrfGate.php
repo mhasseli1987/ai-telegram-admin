@@ -194,4 +194,10 @@ class SsrfGate
         }
         return true;
     }
+
+    /** Alias of validate() kept for readability at call sites. */
+    public function isAllowed(string $url): bool
+    {
+        return $this->validate($url);
+    }
 }

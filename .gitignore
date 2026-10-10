@@ -31,5 +31,7 @@ dist/
 
 # Tests
 Tests/bin/
-phpunit.xml
+# phpunit.xml.dist is committed; local overrides:
+.phpunit.result.cache
+composer.phar
 .cache/

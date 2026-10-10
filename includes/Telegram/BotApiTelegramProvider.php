@@ -38,7 +38,8 @@ class BotApiTelegramProvider implements TelegramProviderInterface
         if ($token === null) {
             $token = $this->getActiveToken();
         }
-        return $this->apiBase . '/' . $token . '/' . $method;
+        // Telegram requires bot<token> with NO separator: bot123456:AAH.../method
+        return $this->apiBase . $token . '/' . $method;
     }
 
     private function getActiveToken(): string

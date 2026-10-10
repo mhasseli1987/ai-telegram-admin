@@ -2,172 +2,179 @@
 /**
  * Integration Test Bootstrap
  * Sets up WordPress test environment for ATA plugin integration tests.
- * This file is loaded by PHPUnit before running integration tests.
+ *
+ * Order matters:
+ *  1. Load project composer autoloader (so PHPUnit\Runner\Version resolves
+ *     and the WP bootstrap version check passes; also autoloads ATA\* classes).
+ *  2. Define WP test constants.
+ *  3. Load the WordPress test-suite bootstrap (installs WP, defines
+ *     WP_UnitTestCase and all test helpers).
+ *  4. Define test doubles (MockHttpTransport) and helpers.
  */
 
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
+
+// 1. Project autoloader first. (Integration -> Tests -> includes -> project root)
+require_once dirname(__DIR__, 3) . '/vendor/autoload.php';
+
+// 2. WP test constants.
 if (!defined('WP_TEST_DIR')) {
-    // Default to standard WordPress test directory
-    define('WP_TEST_DIR', sys_get_temp_dir() . '/wordpress-tests-lib');
+    define('WP_TEST_DIR', 'C:/Users/win11/AppData/Local/Temp/wp-tests/tests/phpunit');
 }
-
-if (!defined('WP_TESTS_DOMAIN')) {
-    define('WP_TESTS_DOMAIN', 'ata-test.local');
+if (!defined('WP_TESTS_PHPUNIT_POLYFILLS_PATH')) {
+    define('WP_TESTS_PHPUNIT_POLYFILLS_PATH', 'C:/Users/win11/AppData/Local/Temp/wp-tests/vendor/yoast/phpunit-polyfills');
 }
-
-if (!defined('WP_TESTS_EMAIL')) {
-    define('WP_TESTS_EMAIL', 'test@ata-test.local');
+if (!defined('WP_TESTS_CONFIG_FILE_PATH')) {
+    define('WP_TESTS_CONFIG_FILE_PATH', 'C:/Users/win11/AppData/Local/Temp/wp-tests/wp-tests-config.php');
 }
+// WP_TESTS_DOMAIN / EMAIL / TITLE come from wp-tests-config.php — do not redefine.
 
-if (!defined('WP_TESTS_TITLE')) {
-    define('WP_TESTS_TITLE', 'ATA Test Site');
-}
+// 3. WordPress test bootstrap (installs WP into wordpress_test DB, defines WP_UnitTestCase).
+require_once WP_TEST_DIR . '/includes/bootstrap.php';
 
-if (!defined('WP_TESTS_PHPUNIT')) {
-    define('WP_TESTS_PHPUNIT', true);
-}
+// Load the plugin (defines ABSPATH-based plugin constants and its autoloader).
+require_once dirname(__DIR__, 3) . '/ata-telegram-ai-admin.php';
 
-// Load WordPress test utilities
-require_once WP_TEST_DIR . '/includes/functions.php';
+// Create the plugin's custom tables in the test database.
+require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+(new \ATA\Infrastructure\WpDb\Installer())->install();
 
 /**
  * Mock HTTP transport for testing external API calls.
- * Records requests and allows canned responses.
+ * Records requests and serves canned responses.
  */
 class MockHttpTransport implements \ATA\Contracts\HttpClientInterface
 {
-    /** @var array<int, array{method:string, url:string, body:string, headers:array, timeout:int}> */
+    /** @var array<int, array{method:string,url:string,body:string,headers:array,timeout:int}> */
     private array $requests = [];
 
-    /** @var array<string, mixed> */
+    /** @var array<string, array{status:int, body:string}> */
     private array $responses = [];
+
+    /** @var array<string, string> */
+    private array $errors = [];
 
     /** @var array<string, int> */
     private array $callCounts = [];
 
     public function __construct()
     {
-        // Default responses
-        $this->responses['default'] = [
-            'code'    => 200,
-            'body'    => json_encode(['success' => true, 'data' => []]),
+        $this->responses['default'] = ['status' => 200, 'body' => '{"success":true}'];
+    }
+
+    public function request(string $url, array $opts = []): array
+    {
+        $method = strtoupper($opts['method'] ?? 'GET');
+        $body   = $opts['body'] ?? '';
+        if (is_array($body)) {
+            // Callers may pass structured payloads (LicenseManager does).
+            $body = (string) wp_json_encode($body, JSON_UNESCAPED_UNICODE);
+        }
+        $this->recordRequest($method, $url, (string) $body, $opts);
+
+        $response = $this->getResponse($method, $url);
+        return [
+            'status'  => $response['status'],
             'headers' => ['Content-Type: application/json'],
+            'body'    => $response['body'],
         ];
     }
 
-    public function get(string $url, array $args = []): string
-    {
-        $this->recordRequest('GET', $url, '', $args);
-        return $this->getResponse('GET', $url);
-    }
-
-    public function post(string $url, array $args = []): string
-    {
-        $body = $args['body'] ?? '';
-        $this->recordRequest('POST', $url, $body, $args);
-        return $this->getResponse('POST', $url);
-    }
-
-    public function put(string $url, array $args = []): string
-    {
-        $body = $args['body'] ?? '';
-        $this->recordRequest('PUT', $url, $body, $args);
-        return $this->getResponse('PUT', $url);
-    }
-
-    public function delete(string $url, array $args = []): string
-    {
-        $this->recordRequest('DELETE', $url, '', $args);
-        return $this->getResponse('DELETE', $url);
-    }
-
-    /**
-     * Set a canned response for a specific URL pattern.
-     */
     public function setResponse(string $method, string $urlPattern, array $response): void
     {
-        $key = $method . ':' . $urlPattern;
-        $this->responses[$key] = $response;
+        $this->responses[$method . ':' . $urlPattern] = [
+            'status' => (int) ($response['status'] ?? $response['code'] ?? 200),
+            'body'   => is_string($response['body'] ?? null) ? $response['body'] : json_encode($response['body'] ?? ''),
+        ];
     }
 
-    /**
-     * Get recorded requests for verification.
-     */
+    public function getError(string $method, string $urlPattern): ?array
+    {
+        return $this->errors[$method . ':' . $urlPattern] ?? null;
+    }
+
+    /** Convenience POST helper (delegates to request()). */
+    public function post(string $url, array $opts = []): array
+    {
+        return $this->request($url, ['method' => 'POST'] + $opts);
+    }
+
+    /** Convenience GET helper (delegates to request()). */
+    public function get(string $url, array $opts = []): array
+    {
+        return $this->request($url, ['method' => 'GET'] + $opts);
+    }
+
+    public function setError(string $method, string $urlPattern, string $message): void
+    {
+        $this->errors[$method . ':' . $urlPattern] = $message;
+    }
+
+    /** @return array<int, array{method:string,url:string,body:string}> */
     public function getRequests(): array
     {
         return $this->requests;
     }
 
-    /**
-     * Get call count for a specific URL pattern.
-     */
     public function getCallCount(string $method, string $urlPattern): int
     {
-        $key = $method . ':' . $urlPattern;
-        return $this->callCounts[$key] ?? 0;
+        return $this->callCounts[$method . ':' . $urlPattern] ?? 0;
     }
 
-    /**
-     * Reset all recorded data.
-     */
     public function reset(): void
     {
-        $this->requests = [];
+        $this->requests   = [];
         $this->callCounts = [];
     }
 
-    private function recordRequest(string $method, string $url, string $body, array $args): void
+    private function recordRequest(string $method, string $url, string $body, array $opts): void
     {
         $this->requests[] = [
-            'method'   => $method,
-            'url'      => $url,
-            'body'     => $body,
-            'headers'  => $args['headers'] ?? [],
-            'timeout'  => $args['timeout'] ?? 30,
+            'method'  => $method,
+            'url'     => $url,
+            'body'    => $body,
+            'headers' => $opts['headers'] ?? [],
+            'timeout' => $opts['timeout'] ?? 30,
         ];
         $key = $method . ':' . $url;
         $this->callCounts[$key] = ($this->callCounts[$key] ?? 0) + 1;
     }
 
-    private function getResponse(string $method, string $url): string
+    private function getResponse(string $method, string $url): array
     {
-        $key = $method . ':' . $url;
-        if (isset($this->responses[$key])) {
-            return $this->buildResponse($this->responses[$key]);
+        if (isset($this->responses[$method . ':' . $url])) {
+            return $this->responses[$method . ':' . $url];
         }
-
-        // Try pattern matching
+        // Wildcard pattern matching ("POST:*bot*/sendMessage").
+        $needle = $method . ':';
         foreach ($this->responses as $pattern => $response) {
-            if ($pattern === 'default') continue;
-            $regexPattern = str_replace('*', '.*', preg_quote($pattern, '/'));
-            if (preg_match('/^' . $regexPattern . '$/', $method . ':' . $url)) {
-                return $this->buildResponse($response);
+            if ($pattern === 'default' || !str_starts_with($pattern, $needle)) {
+                continue;
+            }
+            $glob = substr($pattern, strlen($needle));
+            $regex = '/^' . str_replace('\*', '.*', preg_quote($glob, '/')) . '$/';
+            if (preg_match($regex, $url)) {
+                return $response;
             }
         }
-
-        return $this->buildResponse($this->responses['default']);
-    }
-
-    private function buildResponse(array $response): string
-    {
-        // WP_Http compatible response format
-        $body = $response['body'] ?? '';
-        return $body;
+        return $this->responses['default'];
     }
 }
 
 /**
- * Test helper trait for integration tests.
+ * Shared helpers for integration tests.
  */
 trait IntegrationTestHelper
 {
-    /** @var MockHttpTransport */
     protected MockHttpTransport $mockHttp;
 
-    /** @var \ATA\Core\Container */
     protected \ATA\Core\Container $container;
 
-    /** @var \wpdb */
     protected \wpdb $wpdb;
+
+    /** @var int ID of a user with manage_options. */
+    protected int $adminUserId = 0;
 
     protected function setUp(): void
     {
@@ -176,19 +183,18 @@ trait IntegrationTestHelper
         global $wpdb;
         $this->wpdb = $wpdb;
 
-        // Reset mock HTTP transport
+        $this->adminUserId = self::factory()->user->create(['role' => 'administrator']);
+
         $this->mockHttp = new MockHttpTransport();
 
-        // Get container instance
+        // Rebuild the container fresh each test, then override the HTTP
+        // transport with the mock. Factories are lazy, so every service
+        // resolved from here on receives the mock transport.
         $this->container = \ATA\Core\Container::instance();
+        $this->container->reset();
+        \ATA\Core\Plugin::instance()->registerContainer();
+        $this->container->bind(\ATA\Contracts\HttpClientInterface::class, fn() => $this->mockHttp);
 
-        // Replace HTTP transport with mock
-        $this->container->bind(
-            \ATA\Contracts\HttpClientInterface::class,
-            fn() => $this->mockHttp
-        );
-
-        // Clean up database
         $this->cleanDatabase();
     }
 
@@ -199,133 +205,113 @@ trait IntegrationTestHelper
         parent::tearDown();
     }
 
-    /**
-     * Clean up test tables.
-     */
     private function cleanDatabase(): void
     {
-        $tables = [
-            'ata_posts',
-            'ata_channels',
-            'ata_queue',
-            'ata_logs',
-            'ata_ai_providers',
-            'ata_license',
-        ];
-
-        foreach ($tables as $table) {
-            $this->wpdb->query("DELETE FROM {$this->wpdb->prefix}{$table}");
+        global $wpdb;
+        // ata_providers (NOT ata_ai_providers — matches Installer schema).
+        foreach (['ata_posts', 'ata_channels', 'ata_providers', 'ata_queue', 'ata_logs'] as $table) {
+            $wpdb->query("DELETE FROM {$wpdb->prefix}{$table}");
         }
-
-        // Clean options
-        $options = [
-            'ata_bot_username',
-            'ata_bot_id',
-            'ata_license',
-            'ata_cpt_migrated',
-        ];
-        foreach ($options as $opt) {
+        foreach (['ata_bot_username', 'ata_bot_id', 'ata_license', 'ata_cpt_migrated'] as $opt) {
             delete_option($opt);
         }
+        foreach (['telegram_bot_token', 'ai_api_key'] as $key) {
+            (new \ATA\Security\SecretStore())->delete($key);
+        }
     }
 
-    /**
-     * Assert that a REST request was made with expected parameters.
-     */
-    protected function assertRequestMade(string $method, string $urlPattern, int $expectedCount = 1): void
-    {
-        $count = $this->mockHttp->getCallCount($method, $urlPattern);
-        $this->assertEquals($expectedCount, $count, "Expected $expectedCount requests to $method $urlPattern, got $count");
-    }
-
-    /**
-     * Get the last request matching a pattern.
-     */
-    protected function getLastRequest(string $method, string $urlPattern): ?array
-    {
-        $requests = array_filter($this->mockHttp->getRequests(), function ($r) use ($method, $urlPattern) {
-            return $r['method'] === $method && str_contains($r['url'], $urlPattern);
-        });
-        return end($requests) ?: null;
-    }
-
-    /**
-     * Create a test post in ata_posts table.
-     */
     protected function createTestPost(array $overrides = []): int
     {
         $defaults = [
-            'title'       => 'Test Post',
-            'body'        => 'Test content',
-            'channel_id'  => 1,
-            'status'      => 'draft',
-            'scheduled_at' => null,
-            'published_at' => null,
-            'attempts'    => 0,
-            'last_error_code' => null,
+            'title'      => 'Test Post',
+            'body'       => 'Test content',
+            'channel_id' => 1,
+            'status'     => 'draft',
         ];
-        $repo = new \ATA\Infrastructure\WpDb\PostRepository();
-        return $repo->insert(array_merge($defaults, $overrides));
+        return (new \ATA\Infrastructure\WpDb\PostRepository())->insert(array_merge($defaults, $overrides));
     }
 
-    /**
-     * Create a test channel.
-     */
     protected function createTestChannel(array $overrides = []): int
     {
+        global $wpdb;
+        // Matches Installer schema: chat_id, username, title, chat_type, status, created_at.
         $defaults = [
-            'chat_id'       => '-1001234567890',
-            'title'         => 'Test Channel',
-            'username'      => 'testchannel',
-            'is_admin'      => 1,
-            'last_synced'   => current_time('mysql', 1),
+            'chat_id'    => -1001234567890,
+            'title'      => 'Test Channel',
+            'username'   => 'testchannel',
+            'chat_type'  => 'channel',
+            'status'     => 'connected',
+            'created_at' => current_time('mysql', 1),
+        ];
+        $wpdb->insert($wpdb->prefix . 'ata_channels', array_merge($defaults, $overrides));
+        return (int) $wpdb->insert_id;
+    }
+
+    /** Last recorded request whose URL contains $urlFragment, or null. */
+    protected function getLastRequest(string $method, string $urlFragment): ?array
+    {
+        $matches = array_filter(
+            $this->mockHttp->getRequests(),
+            static fn(array $r): bool => $r['method'] === $method && str_contains($r['url'], $urlFragment)
+        );
+        return $matches === [] ? null : array_values($matches)[count($matches) - 1];
+    }
+
+    /** Stub a Telegram Bot API response for $method (registered for GET and POST). */
+    protected function mockTelegramResponse(string $method, array $result, int $status = 200, bool $ok = true): void
+    {
+        $body = json_encode(['ok' => $ok, 'result' => $result]);
+        $this->mockHttp->setResponse('POST', "*api.telegram.org*/{$method}", ['code' => $status, 'body' => $body]);
+        $this->mockHttp->setResponse('GET', "*api.telegram.org*/{$method}", ['code' => $status, 'body' => $body]);
+    }
+
+    /** Stub an OpenAI-compatible chat/completions response. */
+    protected function mockAiResponse(string $content): void
+    {
+        $this->mockHttp->setResponse('POST', '*chat/completions*', [
+            'code' => 200,
+            'body' => json_encode([
+                'choices' => [['message' => ['content' => $content]]],
+            ]),
+        ]);
+    }
+
+    /** Insert a row into ata_queue. @return int job ID */
+    protected function createQueueItem(array $overrides = []): int
+    {
+        $defaults = [
+            'job_type'     => 'publish_post',
+            'status'       => 'pending',
+            'attempts'     => 0,
+            'max_attempts' => 5,
+            'payload'      => '{}',
+            'next_run_at'  => current_time('mysql', 1),
+            'created_at'   => current_time('mysql', 1),
+            'updated_at'   => current_time('mysql', 1),
         ];
         $data = array_merge($defaults, $overrides);
-        $this->wpdb->insert(
-            $this->wpdb->prefix . 'ata_channels',
-            $data
-        );
+        $this->wpdb->insert($this->wpdb->prefix . 'ata_queue', $data);
         return (int) $this->wpdb->insert_id;
     }
 
-    /**
-     * Set up a fake AI provider response.
-     */
-    protected function mockAiResponse(string $operation, array $response): void
+    protected function getQueueItem(int $id): ?array
     {
-        $this->mockHttp->setResponse('POST', '*/chat/completions', [
-            'code' => 200,
-            'body' => json_encode(['choices' => [['message' => ['content' => json_encode($response)]]]]),
-            'headers' => ['Content-Type: application/json'],
-        ]);
+        return $this->wpdb->get_row(
+            $this->wpdb->prepare("SELECT * FROM {$this->wpdb->prefix}ata_queue WHERE id = %d", $id),
+            ARRAY_A
+        ) ?: null;
     }
 
-    /**
-     * Set up a fake Telegram API response.
-     */
-    protected function mockTelegramResponse(string $method, array $response): void
+    protected function restRequest(string $method, string $route, array $body = [], int $userId = 1): array
     {
-        $this->mockHttp->setResponse('POST', "*bot*/$method", [
-            'code' => 200,
-            'body' => json_encode(['ok' => true, 'result' => $response]),
-            'headers' => ['Content-Type: application/json'],
-        ]);
-    }
-
-    /**
-     * Run a REST request and return decoded response.
-     */
-    protected function restRequest(string $method, string $endpoint, array $body = [], int $userId = 1): array
-    {
-        $request = new \WP_REST_Request($method, $endpoint);
-        $request->set_body_params($body);
-        $request->set_header('Content-Type', 'application/json');
-
-        // Set current user for permission checks
         wp_set_current_user($userId);
 
+        $request = new WP_REST_Request($method, $route);
+        if ($body) {
+            $request->set_body_params($body);
+        }
         $response = rest_do_request($request);
-        $data = $response->get_data();
+        $data     = $response->get_data();
 
         wp_set_current_user(0);
 
@@ -336,21 +322,7 @@ trait IntegrationTestHelper
 /**
  * Base class for integration tests.
  */
-abstract class IntegrationTestCase extends \WP_Unit_Test_Case
+abstract class IntegrationTestCase extends WP_UnitTestCase
 {
     use IntegrationTestHelper;
-
-    /**
-     * Get a fresh container instance for each test.
-     */
-    protected function getFreshContainer(): \ATA\Core\Container
-    {
-        // Clear singleton instance
-        $reflection = new ReflectionClass(\ATA\Core\Container::class);
-        $property = $reflection->getProperty('instance');
-        $property->setAccessible(true);
-        $property->setValue(null, null);
-
-        return \ATA\Core\Container::instance();
-    }
 }

@@ -7,7 +7,7 @@ require_once __DIR__ . '/bootstrap.php';
 
 class TestRestApi extends IntegrationTestCase
 {
-    private int $adminUserId;
+    protected int $adminUserId = 0; // overridden in setUp()
 
     protected function setUp(): void
     {
@@ -17,10 +17,14 @@ class TestRestApi extends IntegrationTestCase
         $this->adminUserId = $this->factory->user->create([
             'role' => 'administrator',
         ]);
+
+        // Queue run / publish flows need a configured bot token.
+        (new \ATA\Security\SecretStore())->set('telegram_bot_token', '123456:TEST-TOKEN');
     }
 
     protected function tearDown(): void
     {
+        (new \ATA\Security\SecretStore())->delete('telegram_bot_token');
         wp_set_current_user(0);
         parent::tearDown();
     }
@@ -47,8 +51,13 @@ class TestRestApi extends IntegrationTestCase
 
         foreach ($endpoints as [$method, $endpoint, $body]) {
             $response = $this->restRequest($method, $endpoint, $body, $subscriberId);
-            $this->assertEquals(false, $response['success'] ?? true, "Endpoint $method $endpoint should fail for subscriber");
-            $this->assertEquals(403, $response['code'] ?? 403, "Endpoint $method $endpoint should return 403");
+            // Permission failure shape: ['code' => 'rest_forbidden', 'data' => ['status' => 403]].
+            $this->assertArrayNotHasKey('success', $response, "Endpoint $method $endpoint should fail for subscriber");
+            $this->assertEquals(
+                403,
+                $response['data']['status'] ?? 0,
+                "Endpoint $method $endpoint should return 403"
+            );
         }
     }
 
@@ -78,8 +87,11 @@ class TestRestApi extends IntegrationTestCase
         $this->assertEquals(false, $response['success']);
         $this->assertStringContainsString('نامعتبر', $response['message'] ?? '');
 
-        // Valid format but invalid token (will fail at Telegram API)
-        $this->mockTelegramResponse('getMe', ['ok' => false, 'description' => 'Unauthorized']);
+        // Valid format but invalid token (401 from Telegram) — getMe is a GET call.
+        $this->mockHttp->setResponse('GET', '*bot*/getMe', [
+            'code' => 401,
+            'body' => json_encode(['ok' => false, 'description' => 'Unauthorized']),
+        ]);
 
         $response = $this->restRequest('POST', '/ata/v1/telegram/connect', ['token' => '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw']);
         $this->assertEquals(false, $response['success']);
@@ -126,6 +138,9 @@ class TestRestApi extends IntegrationTestCase
 
     public function test_telegram_test_requires_connection(): void
     {
+        // Remove the token stored in setUp() — endpoint must refuse without it.
+        (new \ATA\Security\SecretStore())->delete('telegram_bot_token');
+
         $response = $this->restRequest('POST', '/ata/v1/telegram/test', [], $this->adminUserId);
         $this->assertEquals(false, $response['success']);
         $this->assertEquals('not_connected', $response['code'] ?? '');
@@ -146,33 +161,33 @@ class TestRestApi extends IntegrationTestCase
     public function test_ai_add_provider_validates_base_url(): void
     {
         $response = $this->restRequest('POST', '/ata/v1/ai/providers', [
-            'name' => 'Test',
-            'base_url' => 'not-a-url',
-            'model' => 'gpt-4',
+            'name'   => 'Test',
+            'config' => ['baseUrl' => 'not-a-url'],
         ], $this->adminUserId);
 
         $this->assertEquals(false, $response['success']);
-        $this->assertStringContainsString('URL', $response['message'] ?? '');
+        // Real message: "base_url باید با http یا https باشد." — assert on the key name.
+        $this->assertStringContainsString('base_url', $response['message'] ?? '');
     }
 
     public function test_ai_add_provider_stores_encrypted_key(): void
     {
         $response = $this->restRequest('POST', '/ata/v1/ai/providers', [
-            'name' => 'OpenAI',
-            'base_url' => 'https://api.openai.com/v1',
-            'model' => 'gpt-4',
-            'api_key' => 'sk-test123',
+            'name'   => 'OpenAI',
+            'secret' => 'sk-test123',
+            'config' => ['baseUrl' => 'https://api.openai.com/v1/chat/completions'],
         ], $this->adminUserId);
 
         $this->assertEquals(true, $response['success']);
         $this->assertArrayHasKey('id', $response);
 
-        // Verify API key was encrypted
+        // Verify API key was stored via SecretStore (never plaintext in DB).
         $store = $this->container->make(\ATA\Contracts\SecretStoreInterface::class);
         $providers = $this->getAiProvidersFromDb();
         $this->assertCount(1, $providers);
-        $this->assertNotEquals('sk-test123', $providers[0]['secret_ref'] ?? '');
-        $this->assertTrue($store->has($providers[0]['secret_ref']));
+        $ref = (string) $providers[0]['secret_ref'];
+        $this->assertNotEquals('sk-test123', $ref);
+        $this->assertEquals('sk-test123', $store->get($ref));
     }
 
     public function test_ai_list_providers(): void
@@ -187,10 +202,9 @@ class TestRestApi extends IntegrationTestCase
 
     public function test_ai_test_provider(): void
     {
-        $id = $this->createAiProvider(['name' => 'Test', 'base_url' => 'https://api.test/v1', 'model' => 'test', 'api_key' => 'sk-test']);
+        $id = $this->createAiProvider(['name' => 'Test']);
 
-        $this->mockAiResponse('chat/completions', ['content' => 'OK']);
-        $this->mockHttp->setResponse('GET', '*/models', [
+        $this->mockHttp->setResponse('GET', '*models', [
             'code' => 200,
             'body' => json_encode(['data' => [['id' => 'test-model']]]),
         ]);
@@ -279,7 +293,8 @@ class TestRestApi extends IntegrationTestCase
 
         $response = $this->restRequest('GET', '/ata/v1/queue', [], $this->adminUserId);
         $this->assertEquals(true, $response['success']);
-        $this->assertCount(2, $response['items'] ?? []);
+        // Real handler returns the list under 'jobs'.
+        $this->assertCount(2, $response['jobs'] ?? []);
     }
 
     public function test_run_queue_item(): void
@@ -376,20 +391,21 @@ class TestRestApi extends IntegrationTestCase
     {
         $response = $this->restRequest('GET', '/ata/v1/settings', [], $this->adminUserId);
         $this->assertEquals(true, $response['success']);
-        $this->assertArrayHasKey('settings', $response);
-        $this->assertArrayHasKey('ata_ai_default_provider', $response['settings']);
+        // Real handler returns values under 'values'.
+        $this->assertArrayHasKey('values', $response);
+        $this->assertArrayHasKey('ata_default_tone', $response['values']);
     }
 
     public function test_settings_post_updates(): void
     {
         $response = $this->restRequest('POST', '/ata/v1/settings', [
-            'ata_queue_max_jobs' => 10,
+            'ata_log_retention_days' => 10,
         ], $this->adminUserId);
 
         $this->assertEquals(true, $response['success']);
 
         $service = $this->container->make(\ATA\Settings\SettingsService::class);
-        $this->assertEquals(10, $service->get('ata_queue_max_jobs'));
+        $this->assertEquals(10, $service->get('ata_log_retention_days'));
     }
 
     // --------------------------------------------------------------- License Endpoints
@@ -417,46 +433,54 @@ class TestRestApi extends IntegrationTestCase
 
     // --------------------------------------------------------------- Helpers
 
+    /** Matches the real ata_providers schema (type, driver, name, is_default, config_json, secret_ref, created_at). */
     private function createAiProvider(array $overrides = []): int
     {
         $defaults = [
+            'type'        => 'ai',
+            'driver'      => 'openai_compatible',
             'name'        => 'Test Provider',
-            'base_url'    => 'https://api.test/v1',
-            'model'       => 'gpt-4',
-            'config_json' => '{}',
-            'secret_ref'  => 'test_ref',
             'is_default'  => 0,
+            'config_json' => wp_json_encode(['baseUrl' => 'https://api.test/v1', 'model' => 'gpt-4o-mini']),
+            'secret_ref'  => null,
+            'created_at'  => current_time('mysql', 1),
         ];
         $data = array_merge($defaults, $overrides);
-        $this->wpdb->insert($this->wpdb->prefix . 'ata_ai_providers', $data);
+        if (isset($data['config_json']) && is_array($data['config_json'])) {
+            $data['config_json'] = wp_json_encode($data['config_json']);
+        }
+        $data = array_filter($data, static fn($v) => $v !== null);
+        $this->wpdb->insert($this->wpdb->prefix . 'ata_providers', $data);
         return (int) $this->wpdb->insert_id;
     }
 
     private function getAiProvidersFromDb(): array
     {
         return $this->wpdb->get_results(
-            "SELECT * FROM {$this->wpdb->prefix}ata_ai_providers",
+            "SELECT * FROM {$this->wpdb->prefix}ata_providers",
             ARRAY_A
         ) ?: [];
     }
 
-    private function createQueueItem(array $overrides = []): int
+    protected function createQueueItem(array $overrides = []): int
     {
+        // Matches the real ata_queue schema (no priority column).
         $defaults = [
             'job_type'     => 'publish_post',
             'status'       => 'pending',
-            'priority'     => 0,
             'attempts'     => 0,
             'max_attempts' => 5,
             'payload'      => '{}',
             'next_run_at'  => current_time('mysql', 1),
+            'created_at'   => current_time('mysql', 1),
+            'updated_at'   => current_time('mysql', 1),
         ];
         $data = array_merge($defaults, $overrides);
         $this->wpdb->insert($this->wpdb->prefix . 'ata_queue', $data);
         return (int) $this->wpdb->insert_id;
     }
 
-    private function getQueueItem(int $id): ?array
+    protected function getQueueItem(int $id): ?array
     {
         return $this->wpdb->get_row(
             $this->wpdb->prepare("SELECT * FROM {$this->wpdb->prefix}ata_queue WHERE id = %d", $id),

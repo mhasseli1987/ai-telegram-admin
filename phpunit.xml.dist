@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+    bootstrap="includes/Tests/Integration/bootstrap.php"
+    colors="true"
+    convertErrorsToExceptions="true"
+    convertNoticesToExceptions="true"
+    convertWarningsToExceptions="true"
+    backupGlobals="false"
+    verbose="true"
+>
+    <testsuites>
+        <testsuite name="Integration">
+            <directory suffix=".php">includes/Tests/Integration</directory>
+        </testsuite>
+        <testsuite name="Unit">
+            <file>includes/Tests/TestLogger.php</file>
+            <file>includes/Tests/TestSecretStore.php</file>
+            <file>includes/Tests/TestLicenseManager.php</file>
+            <file>includes/Tests/TestRunner.php</file>
+        </testsuite>
+    </testsuites>
+
+    <php>
+        <env name="WP_TESTS_DOMAIN" value="ata-test.local"/>
+        <env name="WP_TESTS_EMAIL" value="test@ata-test.local"/>
+        <env name="WP_TESTS_TITLE" value="ATA Test Site"/>
+        <ini name="memory_limit" value="512M"/>
+        <ini name="max_execution_time" value="300"/>
+    </php>
+</phpunit>

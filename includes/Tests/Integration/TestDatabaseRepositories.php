@@ -10,10 +10,14 @@ class TestDatabaseRepositories extends IntegrationTestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // Publish flows through the queue need a configured bot token.
+        (new \ATA\Security\SecretStore())->set('telegram_bot_token', '123456:TEST-TOKEN');
     }
 
     protected function tearDown(): void
     {
+        (new \ATA\Security\SecretStore())->delete('telegram_bot_token');
         parent::tearDown();
     }
 
@@ -272,7 +276,7 @@ class TestDatabaseRepositories extends IntegrationTestCase
     public function test_post_with_image(): void
     {
         // Create a test attachment
-        $attachmentId = $this->factory->attachment->create_upload_object('test-image.jpg');
+        $attachmentId = $this->factory->attachment->create_upload_object(DIR_TESTDATA . '/images/canola.jpg');
 
         $repo = $this->container->make(\ATA\Infrastructure\WpDb\PostRepository::class);
         $id = $repo->insert([

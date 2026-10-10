@@ -16,6 +16,6 @@ These tests are designed for the WordPress PHPUnit environment. To run:
 3. Tests exercise core contracts: logging redaction, secret encryption, license logic
 
 ## Design
-- All tests use the `WP_Unit_Test_Case` base (included in WP testing library)
+- All tests use the `WP_UnitTestCase` base (included in WP testing library)
 - Tests are isolated: setUp/tearDown clean DB state
 - Focus on contract compliance: logging redaction patterns, encryption roundtrips, license status logic

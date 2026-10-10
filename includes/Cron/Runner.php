@@ -100,7 +100,8 @@ class Runner
         $channelId = (int) $post['channel_id'];
         $text = trim((string) $post['body']);
 
-        if ($channelId <= 0 || $text === '') {
+        // Telegram channel IDs are negative (e.g. -1001234567890); only 0 means unset.
+        if ($channelId === 0 || $text === '') {
             self::failJob((int) $job['id'], 'invalid_post', 'متن یا کانال پست تنظیم نشده است.');
             return;
         }
@@ -182,6 +183,13 @@ class Runner
 
         $attempts = (int) $job['attempts'] + 1;
         $max = (int) $job['max_attempts'];
+
+        // Record the attempt before the cap check, so a job that exhausts
+        // its retries shows attempts == max_attempts.
+        $wpdb->query($wpdb->prepare(
+            "UPDATE $table SET attempts = %d, updated_at = %s WHERE id = %d",
+            [$attempts, current_time('mysql', 1), $jobId]
+        ));
 
         if ($attempts >= $max) {
             self::failJob($jobId, 'max_attempts', $error);

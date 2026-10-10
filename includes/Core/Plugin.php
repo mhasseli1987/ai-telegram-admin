@@ -50,7 +50,11 @@ class Plugin
         $this->registerHooks();
     }
 
-    private function registerContainer(): void
+    /**
+     * Public so integration tests can rebuild the container after reset()
+     * (e.g. to swap the HTTP transport for a mock).
+     */
+    public function registerContainer(): void
     {
         $container = Container::instance();
 
@@ -78,6 +82,9 @@ class Plugin
             $reg->register('openai_compatible', $provider, true);
             return $reg;
         });
+
+        // Default AI provider behind the interface (registry's default()).
+        $container->singleton(AIProviderInterface::class, fn($c) => $c->make(AIProviderRegistry::class)->default());
 
         // Telegram provider.
         $container->singleton(TelegramProviderInterface::class, fn($c) => 

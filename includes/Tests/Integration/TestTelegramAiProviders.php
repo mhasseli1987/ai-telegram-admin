@@ -2,6 +2,11 @@
 /**
  * Integration Test: Telegram & AI Provider Interactions
  * Tests Telegram Bot API adapter and AI provider with mocked HTTP responses.
+ *
+ * Written against the REAL adapter APIs:
+ *  - BotApiTelegramProvider returns the raw Telegram `result` object and
+ *    throws RuntimeException on API failure; only testConnection() is soft.
+ *  - OpenAICompatibleProvider::generate(AIRequest): AIResult.
  */
 require_once __DIR__ . '/bootstrap.php';
 
@@ -10,10 +15,14 @@ class TestTelegramAiProviders extends IntegrationTestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // The Telegram provider requires a configured token.
+        (new \ATA\Security\SecretStore())->set('telegram_bot_token', '123456:TEST-TOKEN');
     }
 
     protected function tearDown(): void
     {
+        (new \ATA\Security\SecretStore())->delete('telegram_bot_token');
         parent::tearDown();
     }
 
@@ -22,20 +31,17 @@ class TestTelegramAiProviders extends IntegrationTestCase
     public function test_telegram_get_me(): void
     {
         $this->mockTelegramResponse('getMe', [
-            'ok' => true,
-            'result' => [
-                'id'         => 123456789,
-                'is_bot'     => true,
-                'first_name' => 'Test Bot',
-                'username'   => 'testbot',
-            ],
+            'id'         => 123456789,
+            'is_bot'     => true,
+            'first_name' => 'Test Bot',
+            'username'   => 'testbot',
         ]);
 
         $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
-        $result = $telegram->getMe();
+        $me = $telegram->getMe();
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals('testbot', $result['username'] ?? '');
+        $this->assertEquals(123456789, $me['id']);
+        $this->assertEquals('testbot', $me['username']);
     }
 
     public function test_telegram_get_me_handles_error(): void
@@ -46,39 +52,33 @@ class TestTelegramAiProviders extends IntegrationTestCase
         ]);
 
         $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
-        $result = $telegram->getMe();
 
-        $this->assertEquals(false, $result['success']);
+        $this->expectException(\RuntimeException::class);
+        $telegram->getMe();
     }
 
     public function test_telegram_get_chat(): void
     {
         $this->mockTelegramResponse('getChat', [
-            'ok' => true,
-            'result' => [
-                'id'       => -1001234567890,
-                'type'     => 'channel',
-                'title'    => 'Test Channel',
-                'username' => 'testchannel',
-            ],
+            'id'       => -1001234567890,
+            'type'     => 'channel',
+            'title'    => 'Test Channel',
+            'username' => 'testchannel',
         ]);
 
         $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
-        $result = $telegram->getChat(-1001234567890);
+        $chat = $telegram->getChat(-1001234567890);
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals('Test Channel', $result['title'] ?? '');
+        $this->assertEquals('Test Channel', $chat['title']);
+        $this->assertEquals('testchannel', $chat['username']);
     }
 
     public function test_telegram_send_message(): void
     {
         $this->mockTelegramResponse('sendMessage', [
-            'ok' => true,
-            'result' => [
-                'message_id' => 123,
-                'date'       => time(),
-                'chat'       => ['id' => -100123],
-            ],
+            'message_id' => 123,
+            'date'       => time(),
+            'chat'       => ['id' => -100123],
         ]);
 
         $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
@@ -87,24 +87,21 @@ class TestTelegramAiProviders extends IntegrationTestCase
             'text'    => 'Hello World',
         ]);
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals(123, $result['message_id'] ?? 0);
+        $this->assertEquals(123, $result['message_id']);
     }
 
     public function test_telegram_send_message_with_parse_mode(): void
     {
-        $this->mockTelegramResponse('sendMessage', ['ok' => true, 'result' => ['message_id' => 1]]);
+        $this->mockTelegramResponse('sendMessage', ['message_id' => 1]);
 
         $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
-        $result = $telegram->sendMessage([
+        $telegram->sendMessage([
             'chat_id'    => -100123,
             'text'       => '<b>Bold</b>',
             'parse_mode' => 'HTML',
         ]);
 
-        $this->assertEquals(true, $result['success']);
-
-        // Verify parse_mode was sent
+        // Verify parse_mode was sent in the request body
         $req = $this->getLastRequest('POST', 'sendMessage');
         $this->assertNotNull($req);
         $body = json_decode($req['body'], true);
@@ -113,10 +110,7 @@ class TestTelegramAiProviders extends IntegrationTestCase
 
     public function test_telegram_send_photo(): void
     {
-        $this->mockTelegramResponse('sendPhoto', [
-            'ok' => true,
-            'result' => ['message_id' => 456],
-        ]);
+        $this->mockTelegramResponse('sendPhoto', ['message_id' => 456]);
 
         $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
         $result = $telegram->sendPhoto([
@@ -125,15 +119,12 @@ class TestTelegramAiProviders extends IntegrationTestCase
             'caption'  => 'Test caption',
         ]);
 
-        $this->assertEquals(true, $result['success']);
+        $this->assertEquals(456, $result['message_id']);
     }
 
     public function test_telegram_edit_message_text(): void
     {
-        $this->mockTelegramResponse('editMessageText', [
-            'ok' => true,
-            'result' => ['message_id' => 123],
-        ]);
+        $this->mockTelegramResponse('editMessageText', ['message_id' => 123]);
 
         $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
         $result = $telegram->editMessageText([
@@ -142,144 +133,191 @@ class TestTelegramAiProviders extends IntegrationTestCase
             'text'       => 'Updated text',
         ]);
 
-        $this->assertEquals(true, $result['success']);
+        $this->assertEquals(123, $result['message_id']);
     }
 
     public function test_telegram_test_connection(): void
     {
-        $this->mockTelegramResponse('getMe', [
-            'ok' => true,
-            'result' => ['id' => 123, 'username' => 'testbot'],
+        $this->mockTelegramResponse('getMe', ['id' => 123, 'username' => 'testbot']);
+
+        $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
+        $result = $telegram->testConnection();
+
+        $this->assertTrue($result['success']);
+        $this->assertEquals('testbot', $result['bot_username'] ?? '');
+    }
+
+    public function test_telegram_test_connection_soft_failure(): void
+    {
+        // testConnection() never throws — it reports failure instead.
+        $this->mockHttp->setResponse('POST', '*bot*/getMe', [
+            'code' => 401,
+            'body' => json_encode(['ok' => false, 'description' => 'Unauthorized']),
         ]);
 
         $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
         $result = $telegram->testConnection();
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals('testbot', $result['bot_username'] ?? '');
+        $this->assertFalse($result['success']);
     }
 
     public function test_telegram_ssrf_protection(): void
     {
-        // The BotApiTelegramProvider uses hardcoded api.telegram.org
-        // Verify it doesn't accept custom base URLs
+        // The BotApiTelegramProvider hardcodes api.telegram.org — the apiBase
+        // property must never be caller-controllable.
         $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
 
         $reflection = new ReflectionClass($telegram);
-        $property = $reflection->getProperty('baseUrl');
-        $property->setAccessible(true);
+        $property = $reflection->getProperty('apiBase');
         $baseUrl = $property->getValue($telegram);
 
         $this->assertStringContainsString('api.telegram.org', $baseUrl);
     }
 
+    public function test_telegram_missing_token_throws(): void
+    {
+        (new \ATA\Security\SecretStore())->delete('telegram_bot_token');
+
+        $telegram = $this->container->make(\ATA\Contracts\Telegram\TelegramProviderInterface::class);
+
+        $this->expectException(\RuntimeException::class);
+        $telegram->getMe();
+    }
+
     // --------------------------------------------------------------- AI Provider
+
+    private function aiRequest(string $operation, string $input, array $config = []): \ATA\Contracts\AI\AIRequest
+    {
+        return new \ATA\Contracts\AI\AIRequest(
+            operations: [$operation],
+            messages: [['role' => 'user', 'content' => $input]],
+            config: $config + ['apiKey' => 'sk-test-key-12345678', 'model' => 'gpt-4o-mini'],
+        );
+    }
 
     public function test_ai_generate(): void
     {
-        $this->mockAiResponse('chat/completions', [
-            'content' => 'Generated content from AI',
-        ]);
+        $this->mockAiResponse('Generated content from AI');
 
         $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
-        $result = $provider->generate('Write a hello world', [
-            'model'       => 'gpt-4',
-            'temperature' => 0.7,
-            'max_tokens'  => 100,
-        ]);
+        $result = $provider->generate($this->aiRequest('generate', 'Write a hello world'));
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals('Generated content from AI', $result['content'] ?? '');
+        $this->assertTrue($result->success);
+        $this->assertEquals('Generated content from AI', $result->content);
     }
 
     public function test_ai_rewrite(): void
     {
-        $this->mockAiResponse('chat/completions', ['content' => 'Rewritten text']);
+        $this->mockAiResponse('Rewritten text');
 
         $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
-        $result = $provider->rewrite('Original text', 'Make it shorter');
+        $result = $provider->generate($this->aiRequest('rewrite', 'Original text'));
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals('Rewritten text', $result['content'] ?? '');
+        $this->assertTrue($result->success);
+        $this->assertEquals('Rewritten text', $result->content);
     }
 
     public function test_ai_summarize(): void
     {
-        $this->mockAiResponse('chat/completions', ['content' => 'Summary of long text']);
+        $this->mockAiResponse('Summary of long text');
 
         $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
-        $result = $provider->summarize('Very long text that needs to be summarized...');
+        $result = $provider->generate($this->aiRequest('summarize', 'Very long text...'));
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals('Summary of long text', $result['content'] ?? '');
+        $this->assertTrue($result->success);
+        $this->assertEquals('Summary of long text', $result->content);
     }
 
     public function test_ai_translate(): void
     {
-        $this->mockAiResponse('chat/completions', ['content' => 'ترجمه شده']);
+        $this->mockAiResponse('ترجمه شده');
 
         $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
-        $result = $provider->translate('Translate this', 'fa');
+        $result = $provider->generate($this->aiRequest('translate', 'Translate this'));
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals('ترجمه شده', $result['content'] ?? '');
+        $this->assertTrue($result->success);
+        $this->assertEquals('ترجمه شده', $result->content);
     }
 
     public function test_ai_generate_title(): void
     {
-        $this->mockAiResponse('chat/completions', ['content' => 'Generated Title']);
+        $this->mockAiResponse('Generated Title');
 
         $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
-        $result = $provider->title('Content to title');
+        $result = $provider->generate($this->aiRequest('title', 'Content to title'));
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals('Generated Title', $result['content'] ?? '');
+        $this->assertTrue($result->success);
+        $this->assertEquals('Generated Title', $result->content);
     }
 
     public function test_ai_generate_caption(): void
     {
-        $this->mockAiResponse('chat/completions', ['content' => 'Caption for image']);
+        $this->mockAiResponse('Caption for image');
 
         $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
-        $result = $provider->caption('Image description');
+        $result = $provider->generate($this->aiRequest('caption', 'Image description'));
 
-        $this->assertEquals(true, $result['success']);
-        $this->assertEquals('Caption for image', $result['content'] ?? '');
+        $this->assertTrue($result->success);
+        $this->assertEquals('Caption for image', $result->content);
+    }
+
+    public function test_ai_empty_input_fails(): void
+    {
+        $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
+        $result = $provider->generate($this->aiRequest('generate', ''));
+
+        $this->assertFalse($result->success);
+        $this->assertEquals('empty_input', $result->errorCode);
     }
 
     public function test_ai_handles_http_error(): void
     {
-        $this->mockHttp->setResponse('POST', '*chat/completions', [
+        $this->mockHttp->setResponse('POST', '*chat/completions*', [
             'code' => 500,
             'body' => json_encode(['error' => ['message' => 'Server error']]),
         ]);
 
         $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
-        $result = $provider->generate('Test prompt');
+        $result = $provider->generate($this->aiRequest('generate', 'Test prompt'));
 
-        $this->assertEquals(false, $result['success']);
-        $this->assertStringContainsString('error', strtolower($result['error'] ?? ''));
+        $this->assertFalse($result->success);
+        $this->assertNotNull($result->errorCode);
+        $this->assertStringContainsString('server error', strtolower($result->errorMessage ?? ''));
     }
 
     public function test_ai_handles_timeout(): void
     {
-        $this->mockHttp->setResponse('POST', '*chat/completions', [
+        $this->mockHttp->setResponse('POST', '*chat/completions*', [
             'code' => 408,
             'body' => 'Request timeout',
         ]);
 
         $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
-        $result = $provider->generate('Test');
+        $result = $provider->generate($this->aiRequest('generate', 'Test'));
 
-        $this->assertEquals(false, $result['success']);
+        $this->assertFalse($result->success);
+    }
+
+    public function test_ai_request_body_has_model_and_auth(): void
+    {
+        $this->mockAiResponse('ok');
+
+        $provider = $this->container->make(\ATA\Contracts\AI\AIProviderInterface::class);
+        $provider->generate($this->aiRequest('generate', 'hello'));
+
+        $req = $this->getLastRequest('POST', 'chat/completions');
+        $this->assertNotNull($req);
+
+        $body = json_decode($req['body'], true);
+        $this->assertEquals('gpt-4o-mini', $body['model'] ?? '');
+        $this->assertEquals('Bearer sk-test-key-12345678', $req['headers']['Authorization'] ?? '');
     }
 
     public function test_ai_provider_registry_resolves_default(): void
     {
         $registry = $this->container->make(\ATA\AI\AIProviderRegistry::class);
 
-        // Default provider should be registered
-        $default = $registry->getDefault();
+        $default = $registry->default();
         $this->assertNotNull($default);
         $this->assertInstanceOf(\ATA\Contracts\AI\AIProviderInterface::class, $default);
     }
@@ -288,14 +326,10 @@ class TestTelegramAiProviders extends IntegrationTestCase
     {
         $registry = $this->container->make(\ATA\AI\AIProviderRegistry::class);
 
-        // Add a second provider
+        // Second provider — same constructor signature (HttpClientInterface + Logger).
         $provider2 = new \ATA\AI\OpenAICompatibleProvider(
             $this->container->make(\ATA\Contracts\HttpClientInterface::class),
-            $this->container->make(\ATA\Contracts\SecretStoreInterface::class),
-            [
-                'baseUrl' => 'https://api.anthropic.com/v1',
-                'model'   => 'claude-3',
-            ]
+            $this->container->make(\ATA\Contracts\Log\LoggerInterface::class)
         );
 
         $registry->register('anthropic', $provider2);
@@ -308,14 +342,13 @@ class TestTelegramAiProviders extends IntegrationTestCase
 
     public function test_http_client_respects_timeout(): void
     {
-        // This test verifies the mock transport receives timeout
         $this->mockHttp->setResponse('POST', 'https://api.test/timeout', [
             'code' => 200,
             'body' => 'ok',
         ]);
 
         $http = $this->container->make(\ATA\Contracts\HttpClientInterface::class);
-        $http->post('https://api.test/timeout', ['timeout' => 10, 'body' => 'test']);
+        $http->request('https://api.test/timeout', ['method' => 'POST', 'timeout' => 10, 'body' => 'test']);
 
         $req = $this->getLastRequest('POST', 'timeout');
         $this->assertNotNull($req);
@@ -327,14 +360,14 @@ class TestTelegramAiProviders extends IntegrationTestCase
         $this->mockHttp->setResponse('POST', 'https://api.test/headers', ['code' => 200, 'body' => 'ok']);
 
         $http = $this->container->make(\ATA\Contracts\HttpClientInterface::class);
-        $http->post('https://api.test/headers', [
+        $http->request('https://api.test/headers', [
+            'method'  => 'POST',
             'headers' => ['Authorization' => 'Bearer token123'],
             'body'    => 'test',
         ]);
 
         $req = $this->getLastRequest('POST', 'headers');
         $this->assertNotNull($req);
-        $this->assertArrayHasKey('Authorization', $req['headers']);
         $this->assertEquals('Bearer token123', $req['headers']['Authorization']);
     }
 
@@ -358,12 +391,11 @@ class TestTelegramAiProviders extends IntegrationTestCase
         $this->assertTrue($ssrf->isAllowed('https://example.com'));
     }
 
-    public function test_ssrf_gate_blocks_dns_rebinding(): void
+    public function test_ssrf_gate_blocks_non_http_schemes(): void
     {
         $ssrf = $this->container->make(\ATA\Security\SsrfGate::class);
 
-        // Hostnames resolving to private IPs should be blocked at connect time
-        // The gate does DNS resolution check
-        $this->assertFalse($ssrf->isAllowed('http://local.internal'));
+        $this->assertFalse($ssrf->isAllowed('file:///etc/passwd'));
+        $this->assertFalse($ssrf->isAllowed('ftp://example.com/file'));
     }
 }

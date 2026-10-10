@@ -8,6 +8,7 @@ use ATA\Contracts\Log\LoggerInterface;
 use ATA\Contracts\SecretStoreInterface;
 use ATA\Contracts\Telegram\TelegramProviderInterface;
 use ATA\Cron\Runner;
+use ATA\License\LicenseManager;
 use ATA\Infrastructure\WpDb\LogRepository;
 use ATA\Infrastructure\WpDb\PostRepository;
 use ATA\Security\SecretStore;
@@ -27,38 +28,37 @@ class RestApi
     {
         $base = 'ata/v1';
         $aiNs = $base . '/ai';
-        $postNs = $base . '/posts';
-        $queueNs = $base . '/queue';
-        $settingsNs = $base . '/settings';
-        $licenseNs = $base . '/license';
-        $logsNs = $base . '/logs';
 
         $routes = [
             [$base, '/telegram/connect', 'POST', 'telegramConnect'],
             [$base, '/telegram/disconnect', 'POST', 'telegramDisconnect'],
             [$base, '/telegram/test', 'POST', 'telegramTest'],
             [$base, '/channels', 'GET', 'listChannels'],
-            [$aiNs, '/providers', 'POST', 'aiAddProvider'],
+            // GET list + POST add share one path — WP merges same-route
+            // registrations, so a method dispatcher keeps both alive.
+            [$aiNs, '/providers', ['GET', 'POST'], 'providers'],
             [$aiNs, '/providers/(?P<id>\d+)', 'POST', 'aiUpdateProvider'],
             [$aiNs, '/providers/(?P<id>\d+)/test', 'POST', 'aiTestProvider'],
             [$aiNs, '/providers/(?P<id>\d+)/models', 'GET', 'aiListModels'],
             [$aiNs, '/generate', 'POST', 'aiGenerate'],
-            [$postNs, '', 'POST', 'createPost'],
-            [$postNs, '/(?P<id>\d+)/preview', 'POST', 'previewPost'],
-            [$postNs, '/(?P<id>\d+)/approve', 'POST', 'approvePost'],
-            [$postNs, '/(?P<id>\d+)/schedule', 'POST', 'schedulePost'],
-            [$postNs, '/(?P<id>\d+)/publish', 'POST', 'publishPost'],
-            [$postNs, '/(?P<id>\d+)/cancel', 'POST', 'cancelPost'],
-            [$queueNs, '', 'GET', 'listQueue'],
-            [$queueNs, '/(?P<id>\d+)/run', 'POST', 'runQueueItem'],
-            [$queueNs, '/(?P<id>\d+)/cancel', 'POST', 'cancelQueueItem'],
-            [$queueNs, '/(?P<id>\d+)/retry', 'POST', 'retryQueueItem'],
-            [$logsNs, '', 'GET', 'listLogs'],
-            [$logsNs, '', 'DELETE', 'clearLogs'],
+            // NOTE: register_rest_route() silently rejects an empty route
+            // string, so collection endpoints must use '/name' under $base
+            // (registering them under "$base/name" with route '' registered nothing).
+            [$base, '/posts', 'POST', 'createPost'],
+            [$base, '/posts/(?P<id>\d+)/preview', 'POST', 'previewPost'],
+            [$base, '/posts/(?P<id>\d+)/approve', 'POST', 'approvePost'],
+            [$base, '/posts/(?P<id>\d+)/schedule', 'POST', 'schedulePost'],
+            [$base, '/posts/(?P<id>\d+)/publish', 'POST', 'publishPost'],
+            [$base, '/posts/(?P<id>\d+)/cancel', 'POST', 'cancelPost'],
+            [$base, '/queue', 'GET', 'listQueue'],
+            [$base, '/queue/(?P<id>\d+)/run', 'POST', 'runQueueItem'],
+            [$base, '/queue/(?P<id>\d+)/cancel', 'POST', 'cancelQueueItem'],
+            [$base, '/queue/(?P<id>\d+)/retry', 'POST', 'retryQueueItem'],
+            [$base, '/logs', ['GET', 'DELETE'], 'logs'],
             [$base, '/dashboard', 'GET', 'getDashboard'],
-            [$settingsNs, '', ['GET', 'POST'], 'settings'],
-            [$licenseNs, '/activate', 'POST', 'licenseActivate'],
-            [$licenseNs, '/deactivate', 'POST', 'licenseDeactivate'],
+            [$base, '/settings', ['GET', 'POST'], 'settings'],
+            [$base, '/license/activate', 'POST', 'licenseActivate'],
+            [$base, '/license/deactivate', 'POST', 'licenseDeactivate'],
         ];
 
         foreach ($routes as [$ns, $route, $methods, $cb]) {
@@ -208,6 +208,29 @@ class RestApi
             return 'base_url باید با http یا https باشد.';
         }
         return null;
+    }
+
+    /** Method dispatcher for /ai/providers (GET list, POST add). */
+    public static function providers(\WP_REST_Request $r): \WP_REST_Response
+    {
+        return strtoupper($r->get_method()) === 'GET'
+            ? self::aiListProviders($r)
+            : self::aiAddProvider($r);
+    }
+
+    /** List configured AI providers (secrets stripped). */
+    public static function aiListProviders(\WP_REST_Request $r): \WP_REST_Response
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'ata_providers';
+        $rows = $wpdb->get_results("SELECT * FROM $table ORDER BY id DESC LIMIT 200", ARRAY_A) ?: [];
+        foreach ($rows as &$row) {
+            $config = json_decode((string) ($row['config_json'] ?? ''), true);
+            $row['config'] = self::stripSecrets(is_array($config) ? $config : []);
+            unset($row['config_json']);
+        }
+        unset($row);
+        return self::ok(['providers' => $rows]);
     }
 
     public static function aiAddProvider(\WP_REST_Request $r): \WP_REST_Response
@@ -655,6 +678,14 @@ class RestApi
         return self::ok(['logs' => $rows, 'total' => $total, 'page' => $page, 'per_page' => $perPage]);
     }
 
+    /** Method dispatcher for /logs (GET list, DELETE clear). */
+    public static function logs(\WP_REST_Request $r): \WP_REST_Response
+    {
+        return strtoupper($r->get_method()) === 'DELETE'
+            ? self::clearLogs($r)
+            : self::listLogs($r);
+    }
+
     public static function clearLogs(\WP_REST_Request $r): \WP_REST_Response
     {
         self::container()->make(LogRepository::class)->deleteAll();
@@ -740,12 +771,22 @@ class RestApi
 
     public static function licenseActivate(\WP_REST_Request $r): \WP_REST_Response
     {
-        // Phase 15 (license server) is not implemented yet — honest 501, not a fake stub.
-        return self::fail('سیستم لایسنس در نسخه‌های بعدی فعال می‌شود.', 501, 'not_implemented');
+        $key = trim((string) (self::body($r)['key'] ?? ''));
+        $result = LicenseManager::activate($key);
+
+        if (!$result['success']) {
+            return self::fail($result['message'], 400, 'license_invalid');
+        }
+        return self::ok(LicenseManager::status());
     }
 
     public static function licenseDeactivate(\WP_REST_Request $r): \WP_REST_Response
     {
-        return self::fail('سیستم لایسنس در نسخه‌های بعدی فعال می‌شود.', 501, 'not_implemented');
+        $result = LicenseManager::deactivate();
+
+        if (!$result['success']) {
+            return self::fail($result['message'], 400, 'license_error');
+        }
+        return self::ok(['status' => LicenseManager::status()]);
     }
 }

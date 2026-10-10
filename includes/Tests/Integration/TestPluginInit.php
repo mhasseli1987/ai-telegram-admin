@@ -107,7 +107,7 @@ class TestPluginInit extends IntegrationTestCase
     public function test_rest_api_routes_registered(): void
     {
         // Ensure REST routes are registered
-        $routes = get_rest_routes();
+        $routes = rest_get_server()->get_routes();
         $this->assertArrayHasKey('/ata/v1/telegram/connect', $routes);
         $this->assertArrayHasKey('/ata/v1/channels', $routes);
         $this->assertArrayHasKey('/ata/v1/ai/providers', $routes);
@@ -172,12 +172,12 @@ class TestPluginInit extends IntegrationTestCase
     public function test_settings_loaded(): void
     {
         $registry = $this->container->make(\ATA\Settings\SettingsRegistry::class);
-        $definitions = $registry->getDefinitions();
+        $definitions = $registry->definitions();
 
         // Should have at least these core settings
-        $this->assertArrayHasKey('ata_ai_default_provider', $definitions);
-        $this->assertArrayHasKey('ata_telegram_default_channel', $definitions);
-        $this->assertArrayHasKey('ata_queue_max_jobs', $definitions);
+        $this->assertArrayHasKey('ata_default_tone', $definitions);
+        $this->assertArrayHasKey('ata_default_language', $definitions);
+        $this->assertArrayHasKey('ata_license_key', $definitions);
         $this->assertArrayHasKey('ata_log_retention_days', $definitions);
     }
 

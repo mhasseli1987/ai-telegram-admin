@@ -1,11 +1,15 @@
 <?php
-namespace ATA;
+namespace ATA\Core;
 
 defined('ABSPATH') || exit;
 
 /**
  * Service Container — minimal DI (D-13).
- * Maps interface → factory. Lazy. No external framework.
+ * Maps interface/class → factory. Lazy. No external framework.
+ *
+ * Re-registration semantics: calling bind()/singleton() for an already-known
+ * abstract replaces the previous factory and drops any cached instance, so
+ * "last registration wins" (used by tests to swap the HTTP transport).
  */
 class Container
 {
@@ -24,11 +28,13 @@ class Container
 
     public function bind(string $abstract, callable $concrete): void
     {
+        unset($this->singletons[$abstract], $this->resolved[$abstract]);
         $this->bindings[$abstract] = $concrete;
     }
 
     public function singleton(string $abstract, callable $concrete): void
     {
+        unset($this->bindings[$abstract], $this->resolved[$abstract]);
         $this->singletons[$abstract] = $concrete;
     }
 
