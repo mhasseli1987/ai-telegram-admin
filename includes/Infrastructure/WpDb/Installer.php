@@ -132,23 +132,19 @@ class Installer
             $this->wpdb->query("DROP TABLE IF EXISTS $t");
         }
 
-        // Remove options.
+        // Plugin option names are stored WITHOUT the DB table prefix, so all
+        // cleanup LIKEs must use the plain 'ata\_%' pattern. The old code used
+        // $wpdb->prefix here, leaving bot tokens and AI API keys behind after
+        // uninstall (secret leak through leftover options).
+        $options = $this->wpdb->options;
+
+        // Everything the plugin created: settings, secrets, bot info, migrations.
         $this->wpdb->query(
-            "SELECT option_name FROM {$this->wpdb->options} WHERE option_name LIKE 'ata\\_%'"
+            $this->wpdb->prepare("DELETE FROM $options WHERE option_name LIKE %s", 'ata\\_%')
         );
-        $like = $this->wpdb->prefix . 'ata\_%';
+        // Legacy prefix-named leftovers from very old builds (harmless if none).
         $this->wpdb->query(
-            $this->wpdb->prepare(
-                "DELETE FROM {$this->wpdb->options} WHERE option_name LIKE %s",
-                $like
-            )
-        );
-        // Also remove secret options.
-        $this->wpdb->query(
-            $this->wpdb->prepare(
-                "DELETE FROM {$this->wpdb->options} WHERE option_name LIKE %s",
-                $this->wpdb->prefix . 'ata_secret\_%'
-            )
+            $this->wpdb->prepare("DELETE FROM $options WHERE option_name LIKE %s", $this->wpdb->prefix . 'ata\\_%')
         );
 
         delete_option('ata_db_version');

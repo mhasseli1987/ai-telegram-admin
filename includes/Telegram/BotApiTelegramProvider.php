@@ -23,6 +23,16 @@ class BotApiTelegramProvider implements TelegramProviderInterface
         $this->logger = $logger;
     }
 
+    /**
+     * Singleton access point for dependency injection.
+     * Use BotApiTelegramProvider::getInstance() to ensure consistent instances.
+     */
+    public static function getInstance(): self
+    {
+        $container = \ATA\Core\Container::instance();
+        return $container->make(self::class);
+    }
+
     private function endpoint(string $method, ?string $token = null): string
     {
         if ($token === null) {
@@ -34,7 +44,7 @@ class BotApiTelegramProvider implements TelegramProviderInterface
     private function getActiveToken(): string
     {
         // SecretStore lookup — never logged.
-        $container = \ATA\Container::instance();
+        $container = \ATA\Core\Container::instance();
         $store = $container->make(\ATA\Contracts\SecretStoreInterface::class);
         $token = $store->get('telegram_bot_token');
         if ($token === null || $token === '') {
@@ -73,12 +83,16 @@ class BotApiTelegramProvider implements TelegramProviderInterface
 
     public function sendMessage(array $payload): array
     {
+        // No default parse_mode: plain text must always send. A caller that wants
+        // HTML/Markdown passes parse_mode explicitly (avoids 400 on raw < / & chars).
         $data = [
             'chat_id' => $payload['chat_id'],
             'text' => $payload['text'],
-            'parse_mode' => $payload['parse_mode'] ?? 'HTML',
             'disable_web_page_preview' => $payload['disable_web_page_preview'] ?? true,
         ];
+        if (!empty($payload['parse_mode'])) {
+            $data['parse_mode'] = $payload['parse_mode'];
+        }
         if (!empty($payload['reply_markup'])) {
             $data['reply_markup'] = $payload['reply_markup'];
         }
@@ -104,8 +118,10 @@ class BotApiTelegramProvider implements TelegramProviderInterface
         $data = [
             'chat_id' => $payload['chat_id'],
             'caption' => $payload['caption'] ?? '',
-            'parse_mode' => $payload['parse_mode'] ?? 'HTML',
         ];
+        if (!empty($payload['parse_mode'])) {
+            $data['parse_mode'] = $payload['parse_mode'];
+        }
         if (!empty($payload['photo'])) {
             $data['photo'] = $payload['photo'];
         }
@@ -129,8 +145,10 @@ class BotApiTelegramProvider implements TelegramProviderInterface
             'chat_id' => $payload['chat_id'],
             'message_id' => $payload['message_id'],
             'text' => $payload['text'],
-            'parse_mode' => $payload['parse_mode'] ?? 'HTML',
         ];
+        if (!empty($payload['parse_mode'])) {
+            $data['parse_mode'] = $payload['parse_mode'];
+        }
 
         $resp = $this->http->request($this->endpoint('editMessageText'), [
             'method' => 'POST',

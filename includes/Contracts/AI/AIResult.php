@@ -12,7 +12,10 @@ class AIResult
         public readonly int $tokensUsed = 0,
         public readonly ?string $errorCode = null,
         public readonly ?string $errorMessage = null,
-        public readonly array $raw = []
+        public readonly array $raw = [],
+        /** Mutable: services (ContentService) attach post-generation info
+         *  (e.g. stored_post_id) after construction; readonly would forbid it. */
+        public array $context = []
     ) {}
 
     public static function ok(string $content, ?string $model = null, int $tokens = 0, array $raw = []): self

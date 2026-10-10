@@ -6,12 +6,21 @@ use ATA\Contracts\SecretStoreInterface;
 defined('ABSPATH') || exit;
 
 /**
- * AES-256-GCM encryption with per-secret key derivation.
- * Secrets never stored in plaintext (rule 13).
+ * Secrets at rest — libsodium XChaCha20-Poly1305-IETF.
+ * Fixes fatally wrong crypto: old code passed ($plaintext, $key, $nonce, $tag)
+ * to sodium_crypto_aead_*_encrypt() (key/nonce swapped, $tag is a return param
+ * of the raw API), used a 24-byte nonce with AES256GCM (needs 12) and then
+ * split the payload with a tag length that never matched how it was produced.
+ *
+ * XChaCha20-Poly1305-IETF accepts 24-byte nonces and is available on any PHP
+ * 7.2+ build with sodium (bundled), no AES hardware requirement.
+ *
+ * Payload format: base64( magic | nonce(24) | ciphertext+tag ).
  */
 class SecretStore implements SecretStoreInterface
 {
     private const OPTION_PREFIX = 'ata_secret_';
+    private const MAGIC = 'ATAS1';
 
     public function get(string $key): ?string
     {
@@ -43,7 +52,7 @@ class SecretStore implements SecretStoreInterface
         if (is_string($key) && strlen($key) >= 32) {
             return hash('sha256', $key, true);
         }
-        // Fallback: derive from WP salt (logged warning once).
+        // Fallback: derive from WP salts (documented limitation in readme notes).
         $salt = defined('AUTH_KEY') ? constant('AUTH_KEY') : 'ata-fallback';
         if (defined('NONCE_SALT')) {
             $salt .= constant('NONCE_SALT');
@@ -53,19 +62,18 @@ class SecretStore implements SecretStoreInterface
 
     private function encrypt(string $plaintext): string
     {
-        $key = $this->getEncryptionKey();
-        $iv = random_bytes(SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES);
-        $tag = '';
-        $ciphertext = sodium_crypto_aead_aes256gcm_encrypt(
+        $key    = $this->getEncryptionKey();
+        $nonce  = random_bytes(SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES); // 24
+        $cipher = sodium_crypto_aead_xchacha20poly1305_ietf_encrypt(
             $plaintext,
-            $key,
-            $iv,
-            $tag
+            self::MAGIC,           // $additional_data (bound into the tag)
+            $nonce,
+            $key
         );
-        if ($ciphertext === false) {
-            throw new \RuntimeException('Encryption failed');
+        if ($cipher === false) {
+            throw new \RuntimeException('Secret encryption failed.');
         }
-        return base64_encode($iv . $tag . $ciphertext);
+        return base64_encode(self::MAGIC . $nonce . $cipher);
     }
 
     private function decrypt(string $payload): ?string
@@ -74,21 +82,22 @@ class SecretStore implements SecretStoreInterface
         if ($raw === false) {
             return null;
         }
-        $npub = SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES;
-        $tagLen = SODIUM_CRYPTO_AEAD_AES256GCM_ABYTES;
-        if (strlen($raw) < $npub + $tagLen) {
-            return null;
+        $magicLen = strlen(self::MAGIC);
+        $npub     = SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES;
+        if (strlen($raw) <= $magicLen + $npub || strncmp($raw, self::MAGIC, $magicLen) !== 0) {
+            return null; // foreign or truncated payload — don't guess
         }
-        $iv = substr($raw, 0, $npub);
-        $tag = substr($raw, $npub, $tagLen);
-        $ciphertext = substr($raw, $npub + $tagLen);
-        $key = $this->getEncryptionKey();
-        $plain = sodium_crypto_aead_aes256gcm_decrypt(
-            $ciphertext,
-            $key,
-            $iv,
-            $tag
+        $nonce = substr($raw, $magicLen, $npub);
+        $cipher = substr($raw, $magicLen + $npub);
+        $plain = sodium_crypto_aead_xchacha20poly1305_ietf_decrypt(
+            $cipher,
+            self::MAGIC,
+            $nonce,
+            $this->getEncryptionKey()
         );
-        return $plain === false ? null : $plain;
+        if ($plain === false) {
+            return null; // tampered or key mismatch
+        }
+        return $plain;
     }
 }

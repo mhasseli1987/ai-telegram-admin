@@ -1,0 +1,4 @@
+.ata-admin-wrap { display: flex; min-height: 100vh; }
+.ata-sidebar { width: 220px; background: #f1f1f1; padding: 16px; }
+.ata-sidebar .components-button { display: block; margin-bottom: 8px; width: 100%; }
+.ata-main { flex: 1; padding: 24px; }

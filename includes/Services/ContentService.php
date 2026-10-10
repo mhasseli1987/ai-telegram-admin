@@ -6,6 +6,7 @@ use ATA\Contracts\AI\AIProviderInterface;
 use ATA\Contracts\AI\AIRequest;
 use ATA\Contracts\AI\AIResult;
 use ATA\Contracts\Log\LoggerInterface;
+use ATA\Infrastructure\WpDb\PostRepository;
 
 defined('ABSPATH') || exit;
 
@@ -13,13 +14,19 @@ class ContentService
 {
     private TelegramProviderInterface $telegram;
     private AIProviderInterface $aiProvider;
+    private LoggerInterface $logger;
+    private PostRepository $posts;
 
     public function __construct(
         TelegramProviderInterface $telegram,
-        AIProviderInterface $aiProvider
+        AIProviderInterface $aiProvider,
+        LoggerInterface $logger,
+        PostRepository $posts
     ) {
         $this->telegram = $telegram;
         $this->aiProvider = $aiProvider;
+        $this->logger = $logger;
+        $this->posts = $posts;
     }
 
     /**
@@ -28,61 +35,73 @@ class ContentService
      */
     public function generate(array $context = []): AIResult
     {
-        $provider = \ATA\AI\AIProviderRegistry::default();
-        if ($provider instanceof AIProviderInterface) {
-            $request = new AIRequest(
-                operations: ['generate'],
-                config: $context['config'] ?? [],
-                messages: [],
-                context: $context
-            );
-            $result = $provider->generate($request);
-            if ($result->success) {
-                // Store draft automatically after generation.
-                $this->storeDraft($result->content, $context);
-            }
-            return $result;
+        $request = new AIRequest(
+            operations: [$context['operation'] ?? 'generate'],
+            messages: [['role' => 'user', 'content' => $context['input'] ?? '']],
+            config: $context['config'] ?? [],
+            context: $context
+        );
+        $result = $this->aiProvider->generate($request);
+        if ($result->success && $result->content !== '') {
+            // Store draft automatically after generation. storeDraft returns a
+            // result row (not mutating by reference — context is passed by value
+            // everywhere, so the old context['stored_post_id'] write was lost).
+            $context['stored_post_id'] = (int) $this->storeDraft($result->content, $context);
+        } else {
+            $context['stored_post_id'] = 0;
         }
-        return AIResult::fail('no_provider', 'هیچ Provider AI تنظیم نشده.');
+        $result->context = $context;
+        return $result;
     }
 
     /**
      * Approve human-approved content and mark as approved.
      */
-    public function approve(string $postId): bool
+    public function approve(int $postId): bool
     {
-        // Update post status via post meta or DB.
-        $post = get_post($postId);
-        if (!$post) {
-            return false;
-        }
-        return update_post_status($postId, 'draft') ? true : false;
+        return $this->posts->update($postId, ['status' => 'approved']);
     }
 
     /**
      * Publish now — send Telegram message.
      */
-    public function publishNow(string $postId): array
+    public function publishNow(int $postId): array
     {
-        $post = get_post($postId);
+        $post = $this->posts->find($postId);
         if (!$post) {
-            return ['success' => false, 'error' => 'پست یافت نشد'];
-        }
-        // Build payload from post data.
-        $text = get_post_meta($postId, 'post_text', true);
-        $channelId = get_post_meta($postId, 'post_channel_id', true);
-
-        if (!$channelId || !$text) {
-            return ['success' => false, 'error' => 'متن یا کانال تنظیم نشده'];
+            return ['success' => false, 'error' => 'پست یافت نشد.'];
         }
 
-        $provider = new BotApiTelegramProvider(\ATA\Infrastructure\Http\WpHttpTransport::make(), \ATA\Logging\Logger::instance());
-        $payload = ['chat_id' => $channelId, 'text' => $text];
+        $text = trim((string) $post['body']);
+        $channelId = (int) $post['channel_id'];
+        if ($channelId <= 0 || $text === '') {
+            return ['success' => false, 'error' => 'متن یا کانال تنظیم نشده است.'];
+        }
+
+        if ((string) $post['status'] === 'published') {
+            return ['success' => false, 'error' => 'این پست قبلاً منتشر شده است.'];
+        }
 
         try {
-            $sent = $provider->sendMessage($payload);
-            return ['success' => true, 'message_id' => $sent['message_id'] ?? null, 'link' => 'https://t.me/' . $sent['chat']['username'] . '/' . $sent['message_id']];
+            $sent = $this->telegram->sendMessage(['chat_id' => $channelId, 'text' => $text]);
+            $this->posts->update($postId, [
+                'status'       => 'published',
+                'published_at' => current_time('mysql', 1),
+                'last_error_code' => null,
+            ]);
+            $this->logger->info('Post published', ['post_id' => $postId, 'scope' => 'publish']);
+
+            $messageId = (int) ($sent['message_id'] ?? 0);
+            $username = $sent['chat']['username'] ?? null;
+            $link = $username ? 'https://t.me/' . $username . '/' . $messageId : null;
+            return ['success' => true, 'message_id' => $messageId, 'link' => $link];
         } catch (\Exception $e) {
+            $this->posts->update($postId, ['last_error_code' => 'publish_failed']);
+            $this->logger->error('Publish failed', [
+                'post_id' => $postId,
+                'scope'   => 'publish',
+                'error'   => $e->getMessage(),
+            ]);
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
@@ -90,20 +109,16 @@ class ContentService
     /**
      * Store generated draft in post meta + log.
      */
-    private function storeDraft(string $content, array $context): void
+    private function storeDraft(string $content, array $context): int
     {
-        $postId = wp_insert_post([
-            'post_title' => $context['title'] ?? '',
-            'post_content' => $content,
-            'post_status' => 'draft',
-            'post_type' => 'ata_post',
+        $postId = $this->posts->insert([
+            'title'      => (string) ($context['title'] ?? ''),
+            'body'       => $content,
+            'channel_id' => (int) ($context['channel_id'] ?? 0),
+            'status'     => 'draft',
         ]);
 
-        update_post_meta($postId, 'post_text', $content);
-        update_post_meta($postId, 'post_channel_id', $context['channel_id'] ?? null);
-        update_post_meta($postId, 'post_config_json', json_encode($context['config'] ?? []));
-
-        $logger = \ATA\Logging\Logger::instance();
-        $logger->info('Draft stored', ['post_id' => $postId, 'scope' => 'content']);
+        $this->logger->info('Draft stored', ['post_id' => $postId, 'scope' => 'content']);
+        return $postId;
     }
 }

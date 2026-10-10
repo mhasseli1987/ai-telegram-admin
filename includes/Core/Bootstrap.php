@@ -12,6 +12,7 @@ class Container
     private static ?Container $instance = null;
     private array $bindings = [];
     private array $singletons = [];
+    private array $resolved = [];
 
     public static function instance(): Container
     {
@@ -34,15 +35,19 @@ class Container
     public function make(string $abstract)
     {
         if (isset($this->singletons[$abstract])) {
-            static $resolved = [];
-            if (!isset($resolved[$abstract])) {
-                $resolved[$abstract] = call_user_func($this->singletons[$abstract], $this);
+            if (!array_key_exists($abstract, $this->resolved)) {
+                $this->resolved[$abstract] = call_user_func($this->singletons[$abstract], $this);
             }
-            return $resolved[$abstract];
+            return $this->resolved[$abstract];
         }
 
         if (isset($this->bindings[$abstract])) {
             return call_user_func($this->bindings[$abstract], $this);
+        }
+
+        if (interface_exists($abstract)) {
+            // Never `new` an interface — it fatals with a confusing error.
+            throw new \RuntimeException("Interface has no binding: {$abstract}");
         }
 
         if (class_exists($abstract)) {
@@ -56,5 +61,6 @@ class Container
     {
         $this->bindings = [];
         $this->singletons = [];
+        $this->resolved = [];
     }
 }

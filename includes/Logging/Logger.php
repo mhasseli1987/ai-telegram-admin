@@ -55,26 +55,55 @@ class Logger implements LoggerInterface
     }
 
     /**
-     * Redact secret-like values from context (defense in depth).
-     * Matches: key*, token*, secret*, authorization, api_key, bot_token.
+     * Redact secrets from context before persistence (defense in depth).
+     * Two layers:
+     *  1. Key-based: any value under a secret-looking key ('bot_token',
+     *     'api_key', 'authorization', ...) is masked — this closed the biggest
+     *     hole: context like ['bot_token' => '123:AAH...'] used to be written
+     *     verbatim to ata_logs.
+     *  2. Pattern-based: secret-looking fragments inside free text
+     *     ('key=...', 'Bearer sk-...', 40+ hex/entropy strings).
      */
     public static function redact(array $context): array
     {
-        $patterns = [
-            '/(?i)(api[_-]?key|bot[_-]?token|secret|authorization|password|passwd|token)\b\s*[:=]\s*[^\s,}]+/m',
-        ];
-
-        $redacted = $context;
-        foreach ($redacted as $k => $v) {
-            if (!is_string($v) && !is_numeric($v)) {
+        $out = [];
+        foreach ($context as $k => $v) {
+            $key = strtolower((string)$k);
+            if (self::isSecretKey($key)) {
+                $out[$k] = '***';
                 continue;
             }
-            $str = (string)$v;
-            foreach ($patterns as $pat) {
-                $str = preg_replace($pat, '$1=***', $str);
+            if (is_array($v)) {
+                $out[$k] = self::redact($v); // recurse into nested context
+                continue;
             }
-            $redacted[$k] = $str;
+            if (is_string($v) || is_numeric($v)) {
+                $out[$k] = self::redactString((string)$v);
+            } else {
+                $out[$k] = $v;
+            }
         }
-        return $redacted;
+        return $out;
+    }
+
+    private static function isSecretKey(string $key): bool
+    {
+        return (bool) preg_match(
+            '/(api[_-]?key|apikey|bot[_-]?token|secret|authorization|password|passwd|pwd|token|bearer|credential)/i',
+            $key
+        );
+    }
+
+    private static function redactString(string $str): string
+    {
+        // key=value / key: value inside free-form strings.
+        $str = preg_replace(
+            '/(api[_-]?key|apikey|bot[_-]?token|secret|authorization|password|passwd|token)\b\s*[:=]\s*\S+/i',
+            '$1=***',
+            $str
+        ) ?: $str;
+        // Bearer / raw key fragments.
+        $str = preg_replace('/(sk-[A-Za-z0-9_-]{8,})/', '***', $str) ?: $str;
+        return $str;
     }
 }

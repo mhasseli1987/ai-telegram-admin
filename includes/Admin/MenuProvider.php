@@ -1,7 +1,6 @@
 <?php
 namespace ATA\Admin;
 
-use ATA\Core\Container;
 use ATA\Settings\SettingsService;
 use ATA\Security\SecretStore;
 use ATA\Logging\Logger;
@@ -57,19 +56,44 @@ class MenuProvider
                 [self::class, 'subpage']
             );
         }
+
+        // Enqueue React SPA assets.
+        add_action('admin_enqueue_scripts', [self::class, 'enqueueAssets']);
+    }
+
+    public static function enqueueAssets(string $hook): void
+    {
+        if (strpos($hook, 'ata-') !== 0) {
+            return;
+        }
+
+        wp_enqueue_script(
+            'ata-admin-app',
+            ATA_URL . 'includes/Admin/js/admin-app.js',
+            ['wp-element', 'wp-components', 'wp-i18n'],
+            ATA_VERSION,
+            true
+        );
+
+        wp_localize_script('ata-admin-app', 'ATA_REST_URL', [
+            'url' => rest_url('ata/v1/'),
+        ]);
+
+        wp_enqueue_style(
+            'ata-admin-app',
+            ATA_URL . 'includes/Admin/css/admin-style.css',
+            [],
+            ATA_VERSION
+        );
     }
 
     public static function adminPage(): void
     {
-        echo '<div class="wrap"><h1>ATA: AI Telegram Admin</h1>';
-        echo '<p>پلاگین مدیریت هوشمند کانال‌ها و محتوای تلگرام با AI</p>';
-        echo '</div>';
+        echo '<div class="wrap"><div id="ata-admin-root"></div></div>';
     }
 
     public static function subpage(): void
     {
-        echo '<div class="wrap"><h2>ATA: Admin Subpage</h2>';
-        echo '<p>وارد بخش مورد نظر شوید.</p>';
-        echo '</div>';
+        echo '<div class="wrap"><div id="ata-admin-root"></div></div>';
     }
 }
