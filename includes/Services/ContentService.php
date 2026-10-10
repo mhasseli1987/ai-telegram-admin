@@ -74,7 +74,8 @@ class ContentService
 
         $text = trim((string) $post['body']);
         $channelId = (int) $post['channel_id'];
-        if ($channelId <= 0 || $text === '') {
+        // Telegram channel IDs are negative; only 0 means unset.
+        if ($channelId === 0 || $text === '') {
             return ['success' => false, 'error' => 'متن یا کانال تنظیم نشده است.'];
         }
 

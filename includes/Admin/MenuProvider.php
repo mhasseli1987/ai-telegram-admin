@@ -64,7 +64,9 @@ class MenuProvider
 
     public static function enqueueAssets(string $hook): void
     {
-        if (strpos($hook, 'ata-') !== 0) {
+        // Hook suffixes: 'toplevel_page_{slug}' for the parent menu and
+        // '{parent}_page_{sub}' for subpages — both must load the SPA.
+        if (strpos($hook, 'ata-') !== 0 && strpos($hook, 'page_ata-') === false) {
             return;
         }
 
@@ -77,7 +79,9 @@ class MenuProvider
         );
 
         wp_localize_script('ata-admin-app', 'ATA_REST_URL', [
-            'url' => rest_url('ata/v1/'),
+            'url'   => rest_url('ata/v1/'),
+            // wp_rest nonce — without it every REST call from the SPA answers 403.
+            'nonce' => wp_create_nonce('wp_rest'),
         ]);
 
         wp_enqueue_style(

@@ -9,8 +9,13 @@
 
   function api(path, opts) {
     opts = opts || {};
+    // Cookie-authenticated REST calls require the wp_rest nonce, or WP
+    // answers 403 rest_forbidden for permission_callback-gated routes.
     return fetch(ATA_REST_URL.url + path.replace(/^\//, ''), Object.assign({
-      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      headers: Object.assign(
+        { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json' },
+        ATA_REST_URL.nonce ? { 'X-WP-Nonce': ATA_REST_URL.nonce } : {}
+      ),
       credentials: 'same-origin',
     }, opts)).then(function (r) { return r.json().catch(function () { return {}; }); });
   }
@@ -21,13 +26,12 @@
     ['content', 'ایجاد محتوا', 'edit'],
     ['scheduler', 'زمان‌بندی', 'calendar'],
     ['queue', 'صف انتشار', 'sort'],
-    ['ai-providers', 'پروVIDERها', 'admin-network'],
+    ['ai-providers', 'AI Providerها', 'admin-network'],
     ['ai-generate', 'AI تولید', 'admin-post'],
     ['channels', 'کانال‌ها', 'groups'],
     ['posts', 'پست‌ها', 'admin-post'],
     ['logs', 'لاگ‌ها', 'marker'],
     ['telegram', 'تلگرام', 'share'],
-    ['license', 'لایسنس', 'awards'],
     ['settings', 'تنظیمات', 'admin-settings'],
     ['help', 'راهنما', 'editor-help'],
   ];
@@ -41,13 +45,18 @@
       api('/dashboard').then(function (d) { set(d); setL(false); });
     }, []);
     if (loading[0]) return e.createElement(c.Spinner);
-    if (!data[0]) return e.createElement(c.Notice, { status: 'error' }, 'خطا');
+    if (!data[0] || !data[0].counts) return e.createElement(c.Notice, { status: 'error' }, 'خطا در دریافت داشبورد');
+    // REST shape: { success, counts: { posts:{status:n}, queue:{status:n}, channels:n, logs:n } }
+    var counts = data[0].counts || {};
+    var q = counts.queue || {};
+    var queueTotal = Object.keys(q).reduce(function (sum, k) { return sum + (parseInt(q[k], 10) || 0); }, 0);
     return e.createElement('div', null,
       e.createElement(c.Card, null,
         e.createElement(c.CardHeader, null, e.createElement('h3', null, 'داشبورد')),
-        e.createElement(c/CardBody, null,
-          e.createElement('p', null, 'کانال‌ها: ' + (data[0].channels && data[0].channels.length || 0)),
-          e.createElement('p', null, 'صف: ' + (data[0].queue && data[0].queue.length || 0))
+        e.createElement(c.CardBody, null,
+          e.createElement('p', null, 'کانال‌ها: ' + (counts.channels || 0)),
+          e.createElement('p', null, 'کارهای صف: ' + queueTotal),
+          e.createElement('p', null, 'لاگ‌ها: ' + (counts.logs || 0))
         )
       )
     );
